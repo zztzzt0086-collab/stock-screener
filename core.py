@@ -425,18 +425,37 @@ def fetch(t):
     # 증설기 회사는 이익이 나도 FCF 가 크게 마이너스인 경우가 있어 따로 본다.
     fcf_last = ocf_last = capex_last = capex_chg = None
     try:
+        # 설비투자 증감은 따로 구해 둔다 (증설기 판별용)
+        ci = capex.dropna().sort_index() if capex is not None else None
+        if ci is not None and len(ci):
+            capex_last = abs(float(ci.iloc[-1]))
+            if len(ci) >= 2 and abs(float(ci.iloc[-2])) > 0:
+                capex_chg = (capex_last / abs(float(ci.iloc[-2])) - 1) * 100
+
+        # ① 야후가 Free Cash Flow 행을 직접 주면 그걸 쓴다
+        fcf_row = _row(cf, ["Free Cash Flow"])
+        if fcf_row is not None:
+            fi = fcf_row.dropna().sort_index()
+            if len(fi):
+                fcf_last = float(fi.iloc[-1])
+
+        # ② 없으면 같은 연도의 영업현금흐름 - 설비투자로 계산한다.
+        #    ASML 은 2025년 영업현금흐름이 비어 있어서
+        #    2024년 OCF 에서 2025년 capex 를 빼는 일이 있었다.
+        #    반드시 연도를 맞춘다.
         if ocf_a is not None:
             oi = ocf_a.dropna().sort_index()
-            ocf_last = float(oi.iloc[-1])
-            c_ = 0.0
-            if capex is not None:
-                ci = capex.dropna().sort_index()
-                if len(ci):
-                    capex_last = abs(float(ci.iloc[-1]))
-                    c_ = float(ci.iloc[-1])
-                    if len(ci) >= 2 and abs(float(ci.iloc[-2])) > 0:
-                        capex_chg = (capex_last / abs(float(ci.iloc[-2])) - 1) * 100
-            fcf_last = ocf_last + c_
+            if len(oi):
+                ocf_last = float(oi.iloc[-1])
+                if fcf_last is None:
+                    dt_o = oi.index[-1]
+                    c_ = 0.0
+                    if ci is not None and dt_o in ci.index:
+                        c_ = float(ci[dt_o])
+                    elif ci is not None:
+                        c_ = None          # 같은 연도 설비투자가 없으면 포기
+                    if c_ is not None:
+                        fcf_last = ocf_last + c_
     except Exception:
         pass
 
