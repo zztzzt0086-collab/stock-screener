@@ -194,7 +194,8 @@ def score_ten(d):
         gap = rg - pg
         o.append(("실적-주가 괴리", 10 if gap >= 50 else 8 if gap >= 20 else 5 if gap >= -20
                   else 2 if gap >= -50 else 0, f"매출{rg:+.0f}% 주가{pg:+.0f}%"))
-    nc, mc = d["netcash"], d["mcap_raw"]
+    # 순현금은 재무제표 통화이므로 같은 통화의 시총과 비교해야 한다
+    nc, mc = d["netcash"], d.get("mcap_fin")
     if nc is not None and mc:
         r = nc / mc * 100
         o.append(("순현금/시총", 10 if r >= 30 else 8 if r >= 10 else 5 if r >= 0
@@ -240,10 +241,11 @@ def score_ten(d):
             o.append(("이익의 질", 10 if r >= 1.3 else 8 if r >= 1 else 5 if r >= .7
                       else 2 if r >= .3 else 0, f"OCF/NI {r:.2f}"))
     fl, ol, cl = d.get("fcf_last"), d.get("ocf_last"), d.get("capex_last")
-    if fl is not None and d["mcap_raw"]:
-        r2 = fl / d["mcap_raw"] * 100
+    if fl is not None and d.get("mcap_fin"):
+        r2 = fl / d["mcap_fin"] * 100
         cc = d.get("capex_chg")
-        t2 = f"{money(fl, d.get('currency', 'USD'))} (시총대비 {r2:+.1f}%)"
+        t2 = f"{money(fl, d.get('fin_currency') or d.get('currency', 'USD'))} " \
+             f"(시총대비 {r2:+.1f}%)"
         if fl < 0 and cc is not None and cc >= 50:
             t2 += f" · 설비투자 {cc:+.0f}%, 증설기"
         o.append(("잉여현금흐름",
@@ -390,8 +392,16 @@ def fetch(t):
     op = _row(inc, ["Operating Income", "EBIT"])
     ni_a = _row(inc, ["Net Income"])
     eq = _row(bs, ["Stockholders Equity"])
-    ocf_a = _row(cf, ["Operating Cash Flow"])
-    capex = _row(cf, ["Capital Expenditure"])
+    # 야후는 회사마다 영업현금흐름 행 이름이 다르다.
+    # ASML 은 "Operating Cash Flow" 가 없어 항목이 통째로 빠졌었다.
+    ocf_a = _row(cf, ["Operating Cash Flow",
+                       "Cash Flow From Continuing Operating Activities",
+                       "Cash Flowsfromusedin Operating Activities Direct",
+                       "Net Cash Provided By Used In Operating Activities",
+                       "Total Cash From Operating Activities"])
+    capex = _row(cf, ["Capital Expenditure",
+                      "Purchase Of PPE",
+                      "Net PPE Purchase And Sale"])
     intx = _row(inc, ["Interest Expense"])
     sh = _row(bs, ["Ordinary Shares Number", "Share Issued"])
 
@@ -527,7 +537,11 @@ def fetch(t):
         dilution = dil_annual
 
     # 분기 현금흐름 질
-    ocf_q = _row(qc, ["Operating Cash Flow"])
+    ocf_q = _row(qc, ["Operating Cash Flow",
+                       "Cash Flow From Continuing Operating Activities",
+                       "Cash Flowsfromusedin Operating Activities Direct",
+                       "Net Cash Provided By Used In Operating Activities",
+                       "Total Cash From Operating Activities"])
     ni_q = _row(qi, ["Net Income"])
     ocf_s = float(ocf_q.iloc[-4:].sum()) if ocf_q is not None else None
     ni_s = float(ni_q.iloc[-4:].sum()) if ni_q is not None else None
@@ -597,13 +611,46 @@ def fetch(t):
     except Exception:
         pass
 
+    # ── 재무제표 통화 기준 시가총액 ──
+    # 해외 ADR 은 재무제표가 본국 통화(TSM=대만달러)인데 주가는 달러다.
+    # "FCF / 시총" 같은 비율을 그냥 계산하면 환율 배수만큼 틀린다.
+    #   예: TSM 잉여현금흐름이 시총의 44% 로 나왔다. 실제는 1.4%.
+    # 그래서 시가총액을 재무제표 통화로 환산해 둔다.
+    fin_cur = info.get("financialCurrency") or cur
+    mcap_fin = mcap
+    if mcap and fin_cur != cur:
+        rate = None
+        try:
+            fx_t = yf.Ticker(f"{cur}{fin_cur}=X")
+            h_fx = fx_t.history(period="5d")
+            if h_fx is not None and len(h_fx):
+                rate = float(h_fx["Close"].iloc[-1])
+        except Exception:
+            pass
+        mcap_fin = mcap * rate if rate else None   # 못 구하면 계산 포기
+
+    # 순현금 = 현금 - 총부채.
+    # 분기 컬럼 순서가 뒤바뀌어 오는 경우가 있어 날짜로 정렬한 뒤
+    # 가장 최근 값을 쓴다. (주식수·부채비율에서 같은 문제를 이미 겪었다)
     netcash = None
     try:
-        cash = _row(qb, ["Cash And Cash Equivalents",
-                         "Cash Cash Equivalents And Short Term Investments"])
-        debt_ = _row(qb, ["Total Debt"])
-        netcash = (float(cash.iloc[-1]) if cash is not None else 0) - \
-                  (float(debt_.iloc[-1]) if debt_ is not None else 0)
+        def _latest(df_, keys):
+            r_ = _row(df_, keys)
+            if r_ is None:
+                return None
+            ser = r_.dropna().sort_index()
+            return float(ser.iloc[-1]) if len(ser) else None
+
+        cash = _latest(qb, ["Cash And Cash Equivalents",
+                            "Cash Cash Equivalents And Short Term Investments"])
+        debt_q = _latest(qb, ["Total Debt"])
+        if cash is None:                      # 분기에 없으면 연간으로
+            cash = _latest(bs, ["Cash And Cash Equivalents",
+                                "Cash Cash Equivalents And Short Term Investments"])
+        if debt_q is None:
+            debt_q = _latest(bs, ["Total Debt"])
+        if cash is not None:
+            netcash = cash - (debt_q or 0)
     except Exception:
         pass
 
@@ -641,6 +688,10 @@ def fetch(t):
         "chg": info.get("regularMarketChangePercent"),
         "currency": cur,
         "mcap_raw": mcap, "mcap_krw": mcap*fx if mcap else None,
+        "mcap_fin": mcap_fin, "fin_currency": fin_cur,
+        "fx_note": (None if fin_cur == cur else
+                    (f"{cur}→{fin_cur} 환산됨" if mcap_fin
+                     else f"{cur}→{fin_cur} 환율 조회 실패")),
         "margin": pct(info.get("operatingMargins")),
         "debt": debt_ratio, "debt_asof": debt_asof, "debt_chg": debt_chg,
         "debt_yf": info.get("debtToEquity"),
