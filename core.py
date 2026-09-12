@@ -151,13 +151,33 @@ def score_ten(d):
         o.append(("ROE", 5 if v >= 20 else 4 if v >= 12 else 2 if v >= 5 else 0,
                   f"{v:.1f}%"))
     peg, per, g = d["peg"], d["per"], d["growth"]
-    if peg and peg > 0:
+
+    # PEG 가 지나치게 낮은 것은 대개 적자→흑자 전환 때
+    # 성장률이 수천 % 로 튀어서 생긴 값이다.
+    #   AEHR PEG 0.02 (PER 43.7), ALAB PEG 0.02 (PER 141)
+    # 일회성 기저효과를 "싸다" 로 읽으면 안 되므로
+    # PEG 0.2 미만이면 믿지 않고 PER 절대수준으로 평가한다.
+    peg_ok = bool(peg) and peg > 0.2
+    # PEG 를 믿을 수 없으면 같은 이익에서 나온 성장률도 믿지 않는다.
+    # (ALAB 은 PEG 0.02 를 걸러도 성장률 120% 로 다시 후한 점수를 받았다)
+    g_ok = (bool(g) and 0 < g <= 80
+            and not (bool(peg) and peg <= 0.2))
+
+    if peg_ok:
         o.append(("밸류에이션", 10 if peg < 1 else 8 if peg < 1.5 else 5 if peg < 2.5
                   else 2 if peg < 4 else 0, f"PEG {peg:.2f}"))
-    elif per and per > 0 and g and g > 0:
+    elif per and per > 0 and g_ok:
         r = per / g
         o.append(("밸류에이션", 10 if r < 1 else 8 if r < 1.5 else 5 if r < 2.5 else 2,
                   f"PER {per:.0f} (성장 {g:.0f}%)"))
+    elif per and per > 0 and (peg or g):
+        # 성장률이나 PEG 는 있는데 믿을 수 없는 값인 경우.
+        # PER 절대수준으로만 보고, 그 사실을 화면에 밝힌다.
+        why = (f"PEG {peg:.2f}" if peg and peg <= 0.2 else f"성장 {g:.0f}%")
+        o.append(("밸류에이션",
+                  9 if per < 10 else 7 if per < 15 else 5 if per < 25
+                  else 3 if per < 40 else 1 if per < 60 else 0,
+                  f"PER {per:.1f} ({why} 는 기저효과로 제외)"))
     elif per and per > 0:
         # 성장률을 못 구한 경우(역성장 포함) PER 절대수준으로만 평가.
         # 성장 대비 평가가 아니므로 만점은 주지 않는다.
@@ -471,6 +491,65 @@ def fetch(t):
             pass
 
     # 배당: 수익률 + 연속 인상 연수
+
+    # ═══════════════════════════════════════════════════════
+    # 참고 지표 (채점에 쓰지 않음, 화면 표시용)
+    #   다모다란이 중요하게 보는 두 가지를 야후 데이터로 계산한다.
+    #   점수에 넣지 않는 이유: 6개월 실험이 SCORE_VERSION 1 로
+    #   진행 중이라 채점 기준을 바꾸면 비교가 깨진다.
+    # ═══════════════════════════════════════════════════════
+
+    # ① ROIC = 세후영업이익 / 투입자본
+    #    ROE 는 빚을 많이 쓰면 부풀려지지만 ROIC 는 그렇지 않다.
+    #    자본비용(보통 8~10%)보다 높아야 가치를 창출하는 것.
+    roic = None
+    try:
+        if op is not None and eq is not None:
+            oi_ = op.dropna().sort_index()
+            eq_ = eq.dropna().sort_index()
+            common = [x for x in oi_.index if x in eq_.index]
+            if common:
+                dt_ = common[-1]
+                ebit = float(oi_[dt_])
+                # 실효세율: 야후가 주면 쓰고 아니면 21% 가정
+                tax = info.get("effectiveTaxRate")
+                tax = tax if isinstance(tax, (int, float)) and 0 <= tax < 0.6 else 0.21
+                nopat = ebit * (1 - tax)
+
+                equity_ = float(eq_[dt_])
+                debt_t = _row(bs, ["Total Debt"])
+                cash_t = _row(bs, ["Cash And Cash Equivalents",
+                                   "Cash Cash Equivalents And Short Term Investments"])
+                d_ = float(debt_t[dt_]) if (debt_t is not None
+                                            and dt_ in debt_t.index) else 0.0
+                c_ = float(cash_t[dt_]) if (cash_t is not None
+                                            and dt_ in cash_t.index) else 0.0
+                invested = equity_ + d_ - c_
+                if invested > 0:
+                    roic = nopat / invested * 100
+    except Exception:
+        pass
+
+    # ② 재투자 효율 = 매출 증가분 / (설비투자 + R&D)
+    #    같은 돈을 써서 매출을 얼마나 늘렸나.
+    #    적자 회사도 계산되므로 초기 성장주를 볼 수 있다.
+    reinv_eff = None
+    try:
+        if rev is not None:
+            rv = rev.dropna().sort_index()
+            if len(rv) >= 2:
+                d_rev = float(rv.iloc[-1]) - float(rv.iloc[-2])
+                dt_ = rv.index[-1]
+                spend = 0.0
+                if capex is not None and dt_ in capex.index:
+                    spend += abs(float(capex[dt_]))
+                if rd_ is not None and dt_ in rd_.index:
+                    spend += abs(float(rd_[dt_]))
+                if spend > 0:
+                    reinv_eff = d_rev / spend
+    except Exception:
+        pass
+
     # ── 배당수익률 ──
     # 두 가지 함정이 있다.
     #  (1) yfinance 버전마다 dividendYield 단위가 다르다 (비율 vs %)
@@ -489,7 +568,19 @@ def fetch(t):
     dy_field = None                     # 야후가 준 값
     raw = info.get("dividendYield")
     if isinstance(raw, (int, float)) and raw > 0:
-        dy_field = raw * 100 if raw < 0.5 else raw
+        # 야후는 같은 필드를 어떤 종목엔 비율(0.0069)로,
+        # 어떤 종목엔 퍼센트(0.69)로 준다. 구분할 방법이 없어
+        # 배당금과 주가로 직접 계산한 값을 기준으로 판정한다.
+        #   PAYC  0.0069 → 0.69%   (100 곱해야 함)
+        #   하이닉스 0.08 → 0.08%  (이미 퍼센트)
+        cand = (raw, raw * 100)
+        if dy_calc and dy_calc > 0:
+            # 직접 계산값에 가까운 쪽을 고른다
+            dy_field = min(cand, key=lambda x: abs(x - dy_calc))
+        else:
+            # 계산값이 없으면(배당금 미제공) 그대로 퍼센트로 본다.
+            # 100 을 곱해 8% 같은 값을 만드는 것보다 안전하다.
+            dy_field = raw
 
     if dy_calc is not None and dy_field is not None:
         # 1.5배 넘게 벌어지면 통화가 섞인 것으로 보고 작은 쪽을 쓴다
@@ -726,6 +817,7 @@ def fetch(t):
         "ocf": ocf_s, "ni": ni_s, "cover": cover, "netcash": netcash,
         "beats": beats,
         "qgrowth": qgrowth, "rnd": rnd, "dy": dy, "div_yrs": div_yrs,
+        "roic": roic, "reinv_eff": reinv_eff,
         "fcf_last": fcf_last, "ocf_last": ocf_last,
         "capex_last": capex_last, "capex_chg": capex_chg, "bvps_chg": bvps_chg,
         "tgt": info.get("targetMeanPrice"),

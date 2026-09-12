@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 from core import (TEN_MAX, LT_MAX, AXES_TEN, AXES_LT, USD_KRW, chart_data,
+                  money,
                   CHARCOAL, ORANGE, AMBER,
                   score_ten, score_lt, fetch, won, pctile,
                   ten_verdict, lt_verdict, dday, footprint, fp_verdict)
@@ -190,6 +191,123 @@ def fp_line(fp):
 # ═════════════════════════════════════════════════════════════
 # 주가 차트 (SVG, 외부 라이브러리 없이)
 # ═════════════════════════════════════════════════════════════
+
+
+# ═════════════════════════════════════════════════════════════
+# 다모다란 관점 (채점과 무관, 참고용)
+#   지금 채점은 "이미 잘하고 있는 회사"를 찾는 잣대라
+#   적자인 초기 성장주가 크게 깎인다.
+#   다모다란은 "앞으로 얼마나 벌지"를 보므로 관점이 다르다.
+#   섞으면 6개월 실험 비교가 깨지므로 점수에는 넣지 않는다.
+# ═════════════════════════════════════════════════════════════
+
+def damo_section(d):
+    rc = d.get("roic")
+    re_ = d.get("reinv_eff")
+    revs = d.get("revs") or []
+    margins = d.get("margins") or []
+    if rc is None and re_ is None and len(revs) < 2:
+        return
+
+    cur = d.get("fin_currency") or d.get("currency", "USD")
+    GREEN, RED, GRAY = "#16A34A", "#DC2626", "#6B7280"
+
+    st.markdown('<div class="sect">다모다란 관점</div>', unsafe_allow_html=True)
+    with st.expander("펼쳐 보기 (채점에 반영되지 않음)"):
+        wacc = st.slider("자본비용 가정 (%)", 5.0, 15.0, 9.0, 0.5,
+                         key=f"wacc_{d['ticker']}",
+                         help="보통 8~10%. 위험한 회사일수록 높게 잡는다")
+
+        blocks = []
+
+        # 1. 가치 창출
+        rows = []
+        if rc is not None:
+            gap = rc - wacc
+            col = GREEN if gap > 0 else RED
+            rows += [("ROIC", f"{rc:.1f}%", None),
+                     ("자본비용 가정", f"{wacc:.1f}%", None),
+                     ("초과수익",
+                      f'<span style="color:{col};font-weight:700">{gap:+.1f}%p</span>'
+                      f' · {"가치 창출" if gap > 0 else "가치 파괴"}', None)]
+        else:
+            rows.append(("ROIC", "계산 불가 (데이터 부족)", GRAY))
+        blocks.append(("1. 가치를 만들고 있나", rows,
+                       "ROE 는 빚을 많이 쓰면 부풀려지지만 ROIC 는 그렇지 않습니다. "
+                       "자본비용보다 높아야 가치를 만드는 것입니다."))
+
+        # 2. 성장의 대가
+        rows = []
+        if re_ is not None:
+            j = ("효율 높음" if re_ >= 2 else "보통" if re_ >= 0.5 else
+                 "투자 회수 전" if re_ >= 0 else "매출 감소 중")
+            rows.append(("재투자 효율", f"{re_:.2f}배 · {j}", None))
+        cl, cc = d.get("capex_last"), d.get("capex_chg")
+        if cl:
+            note = f"  (전년比 {cc:+.0f}%)" if cc is not None else ""
+            rows.append(("설비투자", money(cl, cur) + note, None))
+        fl = d.get("fcf_last")
+        if fl is not None:
+            extra = " · 성장에 다 쓰는 중" if fl < 0 else ""
+            rows.append(("잉여현금흐름", money(fl, cur) + extra, None))
+        if rows:
+            blocks.append(("2. 성장에 얼마를 쓰고 있나", rows,
+                           "설비투자와 R&D 를 합친 돈 1 이 매출을 얼마나 늘렸는지 봅니다. "
+                           "적자 회사도 계산되므로 초기 성장주를 볼 수 있습니다."))
+
+        # 3. 성장의 모양
+        rows = []
+        if len(revs) >= 2:
+            gs = [(revs[i+1]/revs[i]-1)*100 for i in range(len(revs)-1)
+                  if revs[i] > 0]
+            if gs:
+                rows.append(("매출 성장률",
+                             " → ".join(f"{g:+.0f}%" for g in gs[-4:]), None))
+        c = d.get("cagr")
+        if c is not None:
+            rows.append(("장기 CAGR", f"{c:.1f}%", None))
+        if len(margins) >= 2:
+            rows.append(("영업이익률",
+                         " → ".join(f"{x:.0f}%" for x in margins[-4:]), None))
+            tr = margins[-1] - margins[0]
+            rows.append(("추세", f"{tr:+.0f}%p · "
+                         f'{"개선 중" if tr > 2 else "악화 중" if tr < -2 else "횡보"}',
+                         None))
+        if rows:
+            blocks.append(("3. 어떻게 크고 있나", rows, None))
+
+        # 4. 주가가 기대하는 것
+        rows = []
+        per, peg = d.get("per"), d.get("peg")
+        if per:
+            rows.append(("PER", f"{per:.1f}", None))
+            rows.append(("PEG 1 이 되려면", f"연 {per:.0f}% 성장 필요", GRAY))
+        if peg:
+            rows.append(("PEG", f"{peg:.2f}", None))
+        if d.get("tgt") and d.get("price"):
+            up = (d["tgt"]/d["price"]-1)*100
+            rows.append(("애널 목표가", f"{d['tgt']:,.0f}  {up:+.0f}%", None))
+        if rows:
+            blocks.append(("4. 지금 주가가 기대하는 것", rows, None))
+
+        for title, rows, note in blocks:
+            st.markdown(f'<div style="font-size:.8rem;font-weight:700;'
+                        f'color:{CHARCOAL};margin:10px 0 4px">{title}</div>',
+                        unsafe_allow_html=True)
+            st.markdown("".join(
+                f'<div class="metric"><span class="mk">{k}</span>'
+                f'<span class="mv"'
+                + (f' style="color:{c_}"' if c_ else "") + f'>{v}</span></div>'
+                for k, v, c_ in rows), unsafe_allow_html=True)
+            if note:
+                st.markdown(f'<p class="note">{note}</p>', unsafe_allow_html=True)
+
+        st.markdown('<p class="note" style="margin-top:10px">'
+                    '다모다란: "모든 밸류에이션은 틀린다. 문제는 얼마나 틀리느냐다."<br>'
+                    '이 지표들은 답이 아니라 질문의 출발점입니다. '
+                    '채점(성장 잠재력·장기 보유)에는 들어가지 않습니다.</p>',
+                    unsafe_allow_html=True)
+
 
 def price_chart(t, currency="USD"):
     """1년 일봉 캔들 + 20/50MA + 기간별 수익률."""
@@ -496,6 +614,8 @@ def detail(d, band=None):
         f'<div class="metric"><span class="mk">{k}</span>'
         f'<span class="mv">{v}</span></div>' for k, v in rows),
         unsafe_allow_html=True)
+
+    damo_section(d)
 
     st.markdown('<p class="note">체크리스트지 추천이 아닙니다. '
                 '자동 수집값은 누락·오류가 있을 수 있으니 최종 판단 전 '
