@@ -643,25 +643,32 @@ def main():
                 st.rerun()
         if changed:
             save_state(stt)
+        # 백업/복원은 목록이 비어 있을 때도 보여야 한다.
+        # (재시작으로 목록이 날아갔을 때 복원해야 하는데,
+        #  비었다고 복원 칸을 숨기면 복구할 방법이 없어진다)
+        st.divider()
         if watch:
-            st.divider()
             st.caption("백업 (앱이 재시작되면 목록이 초기화될 수 있으니 "
                        "가끔 아래 내용을 복사해 두세요)")
             st.code(json.dumps(stt, ensure_ascii=False))
-            with st.expander("백업 복원"):
-                rb = st.text_area("복사해 둔 백업 붙여넣기", height=68)
-                if st.button("복원", use_container_width=True):
-                    try:
-                        raw = json.loads(rb)
-                        if isinstance(raw, list):
-                            stt2 = {"tickers": raw, "bands": {}}
-                        else:
-                            stt2 = {"tickers": raw.get("tickers", []),
-                                    "bands": raw.get("bands", {})}
-                        save_state(stt2)
-                        st.rerun()
-                    except Exception:
-                        st.error("붙여넣은 내용이 올바른 백업 형식이 아닙니다.")
+        else:
+            st.caption("목록이 비어 있습니다. 복사해 둔 백업이 있으면 "
+                       "아래에서 복원하세요.")
+        with st.expander("백업 복원", expanded=not watch):
+            rb = st.text_area("복사해 둔 백업 붙여넣기", height=68,
+                              placeholder='{"tickers": ["MU","ALAB"], "bands": {}}')
+            if st.button("복원", use_container_width=True):
+                try:
+                    raw = json.loads(rb)
+                    if isinstance(raw, list):
+                        stt2 = {"tickers": raw, "bands": {}}
+                    else:
+                        stt2 = {"tickers": raw.get("tickers", []),
+                                "bands": raw.get("bands", {})}
+                    save_state(stt2)
+                    st.rerun()
+                except Exception:
+                    st.error("붙여넣은 내용이 올바른 백업 형식이 아닙니다.")
 
 
 if gate():
