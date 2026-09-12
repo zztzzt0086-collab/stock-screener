@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
-from core import (TEN_MAX, LT_MAX, AXES_TEN, AXES_LT, USD_KRW,
+from core import (TEN_MAX, LT_MAX, AXES_TEN, AXES_LT, USD_KRW, chart_data,
                   CHARCOAL, ORANGE, AMBER,
                   score_ten, score_lt, fetch, won, pctile,
                   ten_verdict, lt_verdict, dday, footprint, fp_verdict)
@@ -184,6 +184,109 @@ def fp_line(fp):
     lab, col = fp_verdict(fp["score"])
     return (f'<div class="bandline"><span style="color:#9CA3AF">수급 동향</span>'
             f'<span style="color:{col};font-weight:700">{fp["score"]} · {lab}</span></div>')
+
+
+
+# ═════════════════════════════════════════════════════════════
+# 주가 차트 (SVG, 외부 라이브러리 없이)
+# ═════════════════════════════════════════════════════════════
+
+def price_chart(t, currency="USD"):
+    """1년 일봉 캔들 + 20/50MA + 기간별 수익률."""
+    d = chart_data(t)
+    if not d or not d["rows"]:
+        return
+
+    rows = d["rows"]
+    UP, DN = "#DC2626", "#2563EB"     # 한국식: 상승 빨강, 하락 파랑
+
+    W, H = 680, 230
+    PAD_L, PAD_R, PAD_T, PAD_B = 4, 52, 10, 18
+    iw = W - PAD_L - PAD_R
+    ih = H - PAD_T - PAD_B
+
+    lo = min(r["low"] for r in rows)
+    hi = max(r["high"] for r in rows)
+    if hi <= lo:
+        return
+    span = hi - lo
+    lo -= span * 0.04
+    hi += span * 0.04
+    span = hi - lo
+
+    n = len(rows)
+    step = iw / n
+    bw = max(1.0, min(step * 0.62, 6))
+
+    def x(i):
+        return PAD_L + step * (i + 0.5)
+
+    def y(v):
+        return PAD_T + ih * (1 - (v - lo) / span)
+
+    parts = []
+
+    # 가로 눈금 3개
+    for f in (0.0, 0.5, 1.0):
+        v = lo + span * f
+        yy = y(v)
+        parts.append(f'<line x1="{PAD_L}" y1="{yy:.1f}" x2="{PAD_L+iw:.1f}" '
+                     f'y2="{yy:.1f}" stroke="#E5E7EB" stroke-width="1"/>')
+        fmt = f"{v:,.0f}" if currency == "KRW" else f"{v:,.1f}"
+        parts.append(f'<text x="{PAD_L+iw+6:.1f}" y="{yy+3.5:.1f}" font-size="9" '
+                     f'fill="#9CA3AF">{fmt}</text>')
+
+    # 캔들
+    for i, r in enumerate(rows):
+        col = UP if r["close"] >= r["open"] else DN
+        xx = x(i)
+        parts.append(f'<line x1="{xx:.1f}" y1="{y(r["high"]):.1f}" x2="{xx:.1f}" '
+                     f'y2="{y(r["low"]):.1f}" stroke="{col}" stroke-width="0.8"/>')
+        top, bot = max(r["open"], r["close"]), min(r["open"], r["close"])
+        hgt = max(y(bot) - y(top), 0.8)
+        parts.append(f'<rect x="{xx-bw/2:.1f}" y="{y(top):.1f}" width="{bw:.1f}" '
+                     f'height="{hgt:.1f}" fill="{col}"/>')
+
+    # 이동평균선
+    for key, col, wdt in (("ma20", "#EA580C", 1.3), ("ma50", "#6B7280", 1.1)):
+        pts = [f"{x(i):.1f},{y(r[key]):.1f}" for i, r in enumerate(rows)
+               if r.get(key)]
+        if len(pts) > 2:
+            parts.append(f'<polyline points="{" ".join(pts)}" fill="none" '
+                         f'stroke="{col}" stroke-width="{wdt}" opacity="0.85"/>')
+
+    # 날짜 라벨 (양 끝 + 가운데)
+    for i in (0, n // 2, n - 1):
+        anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
+        parts.append(f'<text x="{x(i):.1f}" y="{H-4}" font-size="9" '
+                     f'fill="#9CA3AF" text-anchor="{anchor}">'
+                     f'{rows[i]["date"][2:].replace("-", ".")}</text>')
+
+    st.markdown('<div class="sect">주가 흐름 (1년)</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="margin:2px 0 6px"><svg viewBox="0 0 {W} {H}" width="100%">'
+        + "".join(parts) + "</svg></div>", unsafe_allow_html=True)
+
+    # 기간별 수익률
+    cells = []
+    for label, key in (("7일", "ret_7d"), ("1개월", "ret_1m"),
+                       ("3개월", "ret_3m"), ("6개월", "ret_6m"),
+                       ("1년", "ret_1y")):
+        v = d.get(key)
+        if v is None:
+            txt, col = "-", "#9CA3AF"
+        else:
+            txt = f"{v:+.1f}%"
+            col = UP if v > 0 else (DN if v < 0 else "#6B7280")
+        cells.append(
+            f'<div style="flex:1;text-align:center">'
+            f'<div style="font-size:.7rem;color:#9CA3AF">{label}</div>'
+            f'<div style="font-size:.85rem;font-weight:700;color:{col}">{txt}</div>'
+            f'</div>')
+    st.markdown(f'<div style="display:flex;gap:2px;margin-bottom:6px">'
+                + "".join(cells) + "</div>", unsafe_allow_html=True)
+    st.markdown('<p class="note">주황 20일선 · 회색 50일선 · '
+                '빨강 상승 · 파랑 하락</p>', unsafe_allow_html=True)
 
 
 def fp_section(fp):
@@ -367,6 +470,8 @@ def detail(d, band=None):
             for k, s, v in items)
         st.markdown(rows, unsafe_allow_html=True)
 
+    price_chart(d['ticker'], d.get('currency', 'USD'))
+
     fp_section(footprint(d['ticker']))
 
     st.markdown('<div class="sect">시장 지표</div>', unsafe_allow_html=True)
@@ -406,8 +511,18 @@ def main():
         if not watch:
             st.info("관심종목 탭에서 종목을 추가하면 여기에 표시됩니다.")
         else:
-            mode = st.radio("관점", ["성장", "장기"], horizontal=True,
-                            label_visibility="collapsed")
+            c_a, c_b = st.columns([3, 1])
+            with c_b:
+                # 저장된 데이터를 비우고 야후에서 새로 받아온다.
+                # (평소에는 15분간 재사용하므로 눌러도 값이 거의 안 바뀐다.
+                #  야후 자체가 15~20분 지연이라 완전 실시간은 되지 않는다.)
+                if st.button("새로 받기", use_container_width=True,
+                             help="저장된 데이터를 비우고 다시 조회합니다"):
+                    st.cache_data.clear()
+                    st.rerun()
+            with c_a:
+                mode = st.radio("관점", ["성장", "장기"], horizontal=True,
+                                label_visibility="collapsed")
             m = "ten" if mode == "성장" else "lt"
 
             # 데이터 수집 + 알림 판정

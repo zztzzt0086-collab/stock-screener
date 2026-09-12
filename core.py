@@ -23,6 +23,17 @@ import yfinance as yf
 for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
     logging.getLogger(_n).setLevel(logging.CRITICAL)
 
+# ═════════════════════════════════════════════════════════════
+# 채점 로직 버전
+#   점수 매기는 기준을 고칠 때마다 이 숫자를 올린다.
+#   history/ 에 함께 저장되므로, 나중에 verify 를 돌릴 때
+#   "같은 잣대로 매긴 점수끼리 비교하는지" 확인할 수 있다.
+#
+#   1  2026-09-12  최초. 성장 170점 / 장기 120점 / 수급 가중평균
+#                  (배당·부채비율·주식수·이자보상 계산 오류 수정본)
+# ═════════════════════════════════════════════════════════════
+SCORE_VERSION = 1
+
 USD_KRW = 1380
 
 # 색상 (app.py 와 공용)
@@ -792,6 +803,61 @@ def footprint_from(h):
     return dict(score=score, spike_up=spike_up, spike_dn=spike_dn, updn=updn,
                 obv_chg=obv_chg, px_chg=px_chg, diverge=diverge, distrib=distrib,
                 pullback=pullback, off_hi=off_hi, ma20=ma20, ma50=ma50)
+
+
+
+# ═════════════════════════════════════════════════════════════
+# 차트용 일봉 데이터
+#   footprint 와 같은 6개월 일봉을 쓰지만, 그리기용으로 따로 뽑는다.
+#   (footprint 는 점수만 반환하고 원본을 버리기 때문)
+# ═════════════════════════════════════════════════════════════
+
+@cache(3600)
+def chart_data(t, period="1y"):
+    """일봉 + 이동평균 + 기간별 수익률. 실패 시 None."""
+    try:
+        h = yf.Ticker(t).history(period=period, auto_adjust=True)
+    except Exception:
+        return None
+    if h is None or len(h) < 30:
+        return None
+
+    c = h["Close"]
+    ma20 = c.rolling(20).mean()
+    ma50 = c.rolling(50).mean()
+
+    def ret(days):
+        """N거래일 전 대비 수익률.
+        데이터가 조금 모자라면(예: 1년치인데 248일) 가장 오래된 값을 쓴다.
+        너무 모자라면(절반 미만) None."""
+        if len(c) < 2:
+            return None
+        idx = len(c) - 1 - days
+        if idx < 0:
+            if len(c) < days * 0.5:
+                return None
+            idx = 0
+        a, b = float(c.iloc[idx]), float(c.iloc[-1])
+        return (b / a - 1) * 100 if a > 0 else None
+
+    rows = []
+    for i, (dt, row) in enumerate(h.iterrows()):
+        rows.append({
+            "date": str(dt)[:10],
+            "open": float(row["Open"]), "high": float(row["High"]),
+            "low": float(row["Low"]), "close": float(row["Close"]),
+            "volume": float(row["Volume"]),
+            "ma20": (float(ma20.iloc[i]) if ma20.iloc[i] == ma20.iloc[i] else None),
+            "ma50": (float(ma50.iloc[i]) if ma50.iloc[i] == ma50.iloc[i] else None),
+        })
+
+    return {
+        "rows": rows,
+        "ret_7d": ret(5), "ret_1m": ret(21),
+        "ret_3m": ret(63), "ret_6m": ret(126), "ret_1y": ret(251),
+        "hi": float(c.max()), "lo": float(c.min()),
+        "last": float(c.iloc[-1]),
+    }
 
 
 def fp_verdict(score):
