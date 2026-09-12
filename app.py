@@ -311,11 +311,11 @@ def fp_section(fp):
     if not flags:
         flags.append("특이 흔적 없음")
 
+    # 고점 대비·이동평균은 바로 위 차트에 이미 나오므로 여기서는 뺀다.
+    # 수급 점수를 만든 세 지표만 남긴다.
     rows = [("상승/하락 거래량비 (20일)", f"{fp['updn']:.2f}"),
             ("대량거래일 (양봉/음봉)", f"{fp['spike_up']} / {fp['spike_dn']}"),
-            ("OBV 20일 변화", f"{fp['obv_chg']*100:+.0f}% (가격 {fp['px_chg']*100:+.1f}%)"),
-            ("6개월 고점 대비", f"{fp['off_hi']*100:+.1f}%"),
-            ("20MA / 50MA", f"{fp['ma20']:,.2f} / {fp['ma50']:,.2f}")]
+            ("OBV 20일 변화", f"{fp['obv_chg']*100:+.0f}% (가격 {fp['px_chg']*100:+.1f}%)")]
     st.markdown(f"""<div style="display:flex;justify-content:space-between;
       align-items:center;margin-bottom:8px">
       <span class="badge" style="background:{col}">{lab}</span>

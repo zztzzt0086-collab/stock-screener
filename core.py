@@ -442,18 +442,41 @@ def fetch(t):
             pass
 
     # 배당: 수익률 + 연속 인상 연수
-    # yfinance 버전마다 dividendYield 단위가 달라서(비율 vs %) 직접 계산이 안전
+    # ── 배당수익률 ──
+    # 두 가지 함정이 있다.
+    #  (1) yfinance 버전마다 dividendYield 단위가 다르다 (비율 vs %)
+    #  (2) 해외 ADR 은 배당금이 본국 통화, 주가는 달러라
+    #      그냥 나누면 환율 배수만큼 부풀려진다.
+    #      예: TSM 은 배당이 대만달러라 6.00% 로 나왔다. 실제는 1%대.
+    # 그래서 두 경로로 각각 구한 뒤, 크게 어긋나면 작은 쪽을 믿는다.
     dy = None
     price_ = info.get("currentPrice") or info.get("regularMarketPrice")
+
+    dy_calc = None                      # 배당금 ÷ 주가
     tdr = info.get("trailingAnnualDividendRate")
     if isinstance(tdr, (int, float)) and tdr > 0 and price_:
-        dy = tdr / price_ * 100
-    else:
-        raw = info.get("dividendYield")
-        if isinstance(raw, (int, float)) and raw > 0:
-            dy = raw * 100 if raw < 0.5 else raw     # 0.05=5% vs 5.0=5%
-        elif info.get("payoutRatio") is not None:
-            dy = 0.0
+        dy_calc = tdr / price_ * 100
+
+    dy_field = None                     # 야후가 준 값
+    raw = info.get("dividendYield")
+    if isinstance(raw, (int, float)) and raw > 0:
+        dy_field = raw * 100 if raw < 0.5 else raw
+
+    if dy_calc is not None and dy_field is not None:
+        # 1.5배 넘게 벌어지면 통화가 섞인 것으로 보고 작은 쪽을 쓴다
+        big, small = max(dy_calc, dy_field), min(dy_calc, dy_field)
+        dy = small if (small > 0 and big / small > 1.5) else dy_field
+    elif dy_field is not None:
+        dy = dy_field
+    elif dy_calc is not None:
+        dy = dy_calc
+    elif info.get("payoutRatio") is not None:
+        dy = 0.0
+
+    # 그래도 말이 안 되는 값(연 15% 초과)은 버린다.
+    # 리츠·특수 배당주가 아닌 이상 나오기 어려운 수치다.
+    if dy is not None and dy > 15:
+        dy = None
     div_yrs = None
     try:
         dv = tk.dividends
