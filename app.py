@@ -227,10 +227,16 @@ def damo_section(d):
           <div class="bar-bg"><div class="bar-fl"
           style="width:{pct_}%;background:{col_}"></div></div>""",
           unsafe_allow_html=True)
+        # 5개 항목이 그대로 5개 축이 된다
+        axes_damo = [(k, [k]) for k in DAMO_MAX]
+        st.markdown(radar_svg(items, DAMO_MAX, None, pct_, col_, axes_damo),
+                    unsafe_allow_html=True)
         st.markdown("".join(
-            f'<div class="row"><span class="k">{k}</span>'
-            f'<span class="v">{txt}<span class="sc"> {sc}/{DAMO_MAX[k]}</span>'
-            f'</span></div>' for k, sc, txt in items), unsafe_allow_html=True)
+            f'<div class="metric"><span class="mk">{k}</span>'
+            f'<span class="mv">{txt} '
+            f'<span style="color:#9CA3AF;font-weight:400">'
+            f'{sc}/{DAMO_MAX[k]}</span></span></div>'
+            for k, sc, txt in items), unsafe_allow_html=True)
         st.markdown('<p class="note">기존 채점(성장 잠재력·장기 보유)과 '
                     '별개입니다. "지금 재무가 좋은가" 가 아니라 '
                     '"자본을 굴려 가치를 만들고 있는가" 를 봅니다.</p>',
@@ -481,10 +487,12 @@ def fp_section(fp):
 
 
 
-def radar_svg(items, mx, mode, center_score, center_col):
-    """items=[(k,s,v)], mx=만점dict → 5축 퍼센트 레이더 SVG 문자열."""
+def radar_svg(items, mx, mode, center_score, center_col, axes=None):
+    """items=[(k,s,v)], mx=만점dict → 5축 퍼센트 레이더 SVG 문자열.
+    axes 를 직접 주면 그것을 쓰고, 없으면 mode 로 고른다."""
     got = {k: s for k, s, _ in items}
-    axes = AXES_TEN if mode == "ten" else AXES_LT
+    if axes is None:
+        axes = AXES_TEN if mode == "ten" else AXES_LT
 
     vals = []
     for label, keys in axes:
