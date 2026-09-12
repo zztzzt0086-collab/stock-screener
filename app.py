@@ -31,7 +31,8 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
-from core import (TEN_MAX, LT_MAX, AXES_TEN, AXES_LT, USD_KRW, chart_data,
+from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
+                  score_damo, damo_verdict, USD_KRW, chart_data,
                   money,
                   CHARCOAL, ORANGE, AMBER,
                   score_ten, score_lt, fetch, won, pctile,
@@ -212,8 +213,32 @@ def damo_section(d):
     cur = d.get("fin_currency") or d.get("currency", "USD")
     GREEN, RED, GRAY = "#16A34A", "#DC2626", "#6B7280"
 
-    st.markdown('<div class="sect">다모다란 관점</div>', unsafe_allow_html=True)
-    with st.expander("펼쳐 보기 (채점에 반영되지 않음)"):
+    # ── 점수 (기존 채점과 별개) ──
+    items = score_damo(d)
+    if items:
+        got, avail, pct_ = pctile(items, DAMO_MAX)
+        lab, col_ = damo_verdict(pct_)
+        st.markdown('<div class="sect">다모다란 관점</div>', unsafe_allow_html=True)
+        st.markdown(f"""<div style="display:flex;justify-content:space-between;
+          align-items:center;margin-bottom:6px">
+          <span class="badge" style="background:{col_}">{lab}</span>
+          <span style="font-size:.9rem;font-weight:700;color:{col_}">
+          {got}/{avail} {pct_:.0f}%</span></div>
+          <div class="bar-bg"><div class="bar-fl"
+          style="width:{pct_}%;background:{col_}"></div></div>""",
+          unsafe_allow_html=True)
+        st.markdown("".join(
+            f'<div class="row"><span class="k">{k}</span>'
+            f'<span class="v">{txt}<span class="sc"> {sc}/{DAMO_MAX[k]}</span>'
+            f'</span></div>' for k, sc, txt in items), unsafe_allow_html=True)
+        st.markdown('<p class="note">기존 채점(성장 잠재력·장기 보유)과 '
+                    '별개입니다. "지금 재무가 좋은가" 가 아니라 '
+                    '"자본을 굴려 가치를 만들고 있는가" 를 봅니다.</p>',
+                    unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="sect">다모다란 관점</div>', unsafe_allow_html=True)
+
+    with st.expander("세부 보기"):
         wacc = st.slider("자본비용 가정 (%)", 5.0, 15.0, 9.0, 0.5,
                          key=f"wacc_{d['ticker']}",
                          help="보통 8~10%. 위험한 회사일수록 높게 잡는다")

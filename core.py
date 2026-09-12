@@ -124,6 +124,15 @@ LT_MAX = {"FCF 안정성": 20, "이익률 안정성": 15, "자본수익률": 15,
           "침체 생존력": 15, "장기 성장률": 15, "주식수 관리": 10,
           "배당": 10, "부채 안전성": 10, "밸류에이션": 10}
 
+# ── 다모다란 관점 점수 (100점) ──
+#   기존 두 채점과는 별개다. SCORE_VERSION 에 영향을 주지 않는다.
+#   "지금 재무가 좋은가" 가 아니라
+#   "자본을 굴려 가치를 만들고 있는가" 를 본다.
+#   앞 두 항목에 60점을 몰았다. 다모다란이 가장 중요하게 보는 것이라서.
+DAMO_MAX = {"ROIC 초과수익": 35, "재투자 효율": 25, "이익률 추세": 20,
+            "부채 안전성": 10, "함정 없음": 10}
+DAMO_WACC = 9.0          # 자본비용 기본 가정 %
+
 
 def score_ten(d):
     o = []
@@ -357,11 +366,82 @@ def score_lt(d):
     return o
 
 
+def score_damo(d, wacc=None):
+    """다모다란 관점 점수. (항목, 점수, 설명) 목록을 돌려준다.
+
+    기존 채점(score_ten / score_lt)과 독립이다.
+    데이터가 없는 항목은 아예 넣지 않으므로,
+    pctile() 로 만점 대비 백분율을 내면 된다.
+    """
+    w = DAMO_WACC if wacc is None else wacc
+    o = []
+
+    # ① ROIC 가 자본비용을 얼마나 넘는가 (35점)
+    rc = d.get("roic")
+    if rc is not None:
+        gap = rc - w
+        sc = (35 if gap >= 20 else 28 if gap >= 10 else 20 if gap >= 5
+              else 12 if gap >= 0 else 0)
+        o.append(("ROIC 초과수익", sc,
+                  f"{rc:.1f}% (자본비용 {w:.0f}% 대비 {gap:+.1f}%p)"))
+
+    # ② 돈 1 을 써서 매출이 얼마나 늘었나 (25점)
+    re_ = d.get("reinv_eff")
+    if re_ is not None:
+        sc = (25 if re_ >= 2.0 else 20 if re_ >= 1.5 else 15 if re_ >= 1.0
+              else 8 if re_ >= 0.5 else 0)
+        note = ("효율 높음" if re_ >= 2 else "보통" if re_ >= 0.5
+                else "투자 회수 전" if re_ >= 0 else "매출 감소 중")
+        o.append(("재투자 효율", sc, f"{re_:.2f}배 · {note}"))
+
+    # ③ 이익률이 개선되는 방향인가 (20점)
+    #    적자여도 방향이 맞으면 점수를 준다. 초기 성장주를 보기 위함.
+    m = d.get("margins")
+    if m and len(m) >= 3:
+        late = sum(m[-2:]) / 2
+        early = sum(m[:2]) / 2 if len(m) >= 4 else m[0]
+        tr = late - early
+        sc = (20 if tr >= 10 else 15 if tr >= 3 else 8 if tr >= -3 else 0)
+        note = ("개선 중" if tr >= 3 else "횡보" if tr >= -3 else "악화 중")
+        o.append(("이익률 추세", sc,
+                  f"[{' → '.join(f'{x:.0f}' for x in m[-4:])}%] {tr:+.0f}%p · {note}"))
+
+    # ④ 망하지 않을 여력 (10점)
+    de = d.get("debt")
+    if de is not None:
+        sc = 10 if de <= 30 else 7 if de <= 60 else 4 if de <= 100 else 0
+        o.append(("부채 안전성", sc, f"부채비율 {de:.0f}%"))
+
+    # ⑤ 숫자가 튀어 좋아 보이는 함정 (10점)
+    #    PEG 0.2 미만 = 적자→흑자 전환 착시
+    #    ROE 100% 초과 = 자기자본이 쪼그라든 결과
+    peg, roe = d.get("peg"), d.get("roe")
+    traps = []
+    if peg is not None and 0 < peg < 0.2:
+        traps.append(f"PEG {peg:.2f}")
+    if roe is not None and roe > 100:
+        traps.append(f"ROE {roe:.0f}%")
+    if peg is not None or roe is not None:
+        sc = 10 if not traps else 5 if len(traps) == 1 else 0
+        o.append(("함정 없음", sc,
+                  "없음" if not traps else " / ".join(traps) + " 주의"))
+
+    return o
+
+
+def damo_verdict(p):
+    if p >= 75: return "가치 창출형", ORANGE
+    if p >= 55: return "양호", AMBER
+    if p >= 35: return "주의", "#6B7280"
+    return "가치 파괴형", "#9CA3AF"
+
+
 # ═════════════════════════════════════════════════════════════
 # 수집
 # ═════════════════════════════════════════════════════════════
 
 @cache(900)
+
 def fetch(t):
     tk = yf.Ticker(t)
     try:
