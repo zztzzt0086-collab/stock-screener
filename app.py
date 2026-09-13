@@ -953,9 +953,25 @@ def price_verdict(d):
     if items:
         chips = " · ".join(f"{k} {fmt(v)}" for k, v, _ in items)
         vals = sorted(v for _, v, _ in items)
-        mid = (vals[len(vals)//2] if len(vals) % 2
-               else (vals[len(vals)//2 - 1] + vals[len(vals)//2]) / 2)
+        n_est = len(vals)
+        mid = (vals[n_est//2] if n_est % 2
+               else (vals[n_est//2 - 1] + vals[n_est//2]) / 2)
         ratio = px / mid * 100
+
+        # ★ 2026-09-13 — 값이 셋일 때만 '중앙값' 이 제 역할을 한다.
+        #   둘이면 그냥 평균이고, 튀는 하나를 걸러 주지 못한다.
+        #   실제로 이런 일이 있었다 (PER 10.6 · 매출 -6% 인 종목):
+        #       DCF 110,985 · 애널 169,333  → 중앙값 140,159 → "쌉니다"
+        #       애널을 빼면 110,985          → 현재가의 95%  → "적정 범위"
+        #   애널 3명이 만든 숫자 하나가 판정을 뒤집은 것이다.
+        midlab = "중앙값" if n_est >= 3 else ("평균" if n_est == 2 else "단일값")
+        why = {"DCF": fr.get("dcf_fail"),
+               "PEG": ("성장률이 없거나 음수" if not d.get("growth")
+                       or (d.get("growth") or 0) <= 0 else
+                       "PER 을 못 구함" if not d.get("per") else None),
+               "애널": "목표가 없음"}
+        missing = [f"{k} 없음 ({why.get(k)})" for k in ("DCF", "PEG", "애널")
+                   if k not in [i[0] for i in items] and why.get(k)]
 
         pos = fr.get("pos")
         bar = ""
@@ -970,18 +986,42 @@ def price_verdict(d):
         rtxt = ("적정가보다 비쌉니다" if ratio > 115
                 else "적정가보다 쌉니다" if ratio < 85 else "적정 범위 안입니다")
 
-        warn = ""
+        warns = []
         sp = fr.get("spread")
         if sp and sp >= 3:
-            warn = ('<div class="fwarn">세 방법의 값이 '
-                    f'{sp:.1f}배나 벌어져 있습니다. '
-                    '이런 회사는 어떤 적정주가도 믿을 게 못 됩니다. '
-                    '위의 요구 성장률만 보세요.</div>')
+            warns.append(f'{n_est}개 방법의 값이 {sp:.1f}배나 벌어져 있습니다. '
+                         '이런 회사는 어떤 적정주가도 믿을 게 못 됩니다. '
+                         '위의 요구 성장률만 보세요.')
+
+        # 애널 목표가가 절반 이상을 차지하는가
+        an = next((v for k, v, _ in items if k == "애널"), None)
+        if an is not None and n_est <= 2:
+            others = [v for k, v, _ in items if k != "애널"]
+            nan_ = d.get("n_analyst")
+            bit = (f'<b>애널리스트 목표가가 적정가의 절반을 차지합니다'
+                   + (f' (애널 {nan_}명)' if nan_ else "") + '.</b> '
+                   '세 방법 중 가장 높게 잡히는 값입니다. ')
+            if others:
+                o = others[0]
+                r2 = px / o * 100
+                t2 = ("비쌈" if r2 > 115 else "쌈" if r2 < 85 else "적정")
+                bit += (f'애널을 빼면 적정가는 {fmt(o)} 이고 '
+                        f'현재가는 그것의 <b>{r2:.0f}%</b> ({t2}) 입니다.')
+            warns.append(bit)
+        elif n_est <= 2:
+            warns.append(f'적정가가 {n_est}개뿐이라 튀는 값을 걸러 주지 못합니다.')
+
+        if missing:
+            warns.append("계산되지 않은 것 — " + " · ".join(missing))
+
+        warn = "".join(f'<div class="fwarn">{w}</div>' for w in warns)
 
         st.markdown(
-            f'<div class="fbox"><div class="reqk">적정가 범위</div>'
+            f'<div class="fbox"><div class="reqk">적정가 범위'
+            + (f' <span style="font-weight:400;color:#9CA3AF">({n_est}개)</span>'
+               if n_est < 3 else "") + '</div>'
             f'<div class="fchips">{chips}</div>{bar}'
-            f'<div class="fratio">현재 {fmt(px)} — 적정가(중앙값 {fmt(mid)})의 '
+            f'<div class="fratio">현재 {fmt(px)} — 적정가({midlab} {fmt(mid)})의 '
             f'<b style="color:{rcol}">{ratio:.0f}%</b><br>'
             f'<span style="color:{rcol};font-size:.76rem">{rtxt}</span></div>'
             f'{warn}</div>', unsafe_allow_html=True)
@@ -1039,11 +1079,15 @@ def price_verdict(d):
                         f'가정에서 나옵니다'
                         + (f'<br>{extra["note"]}' if extra.get("note") else "")
                         + '</div>', unsafe_allow_html=True)
-            st.markdown('<div class="note">세 방법 모두 정확하지 않습니다. '
+            st.markdown(f'<div class="note">{"세" if n_est >= 3 else f"이 {n_est}"} '
+                        '방법 모두 정확하지 않습니다. '
                         '애널 목표가는 구조적으로 높게 잡히고, DCF 는 먼 미래 '
                         '가정이 값을 결정하고, PEG 는 어림셈입니다. '
-                        '하나를 믿지 말고 범위로 보세요.</div>',
-                        unsafe_allow_html=True)
+                        '하나를 믿지 말고 범위로 보세요.'
+                        + ('<br><b>지금은 값이 2개뿐이라 서로를 견제하지 '
+                           '못합니다. 위의 요구 성장률을 더 믿으세요.</b>'
+                           if n_est <= 2 else "")
+                        + '</div>', unsafe_allow_html=True)
     elif fr.get("dcf_fail"):
         st.markdown(f'<div class="refbox">적정가를 계산하지 못했습니다 '
                     f'({fr["dcf_fail"]}).</div>', unsafe_allow_html=True)
