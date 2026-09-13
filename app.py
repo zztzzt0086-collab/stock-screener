@@ -36,7 +36,8 @@ from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   money,
                   CHARCOAL, ORANGE, AMBER,
                   score_ten, score_lt, fetch, won, pctile,
-                  ten_verdict, lt_verdict, dday, footprint, fp_verdict)
+                  ten_verdict, lt_verdict, dday, footprint, fp_verdict,
+                  macro, vix_mood, implied_growth, fair_range)
 
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
@@ -72,6 +73,102 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
        font-weight:700;margin:18px 0 7px;}}
 .note {{font-size:.72rem;color:#9CA3AF;line-height:1.5;}}
 .stButton>button {{border-radius:7px;font-weight:600;}}
+
+/* ───────── 2026-09-13 디자인 개편 ─────────
+   "뭘 봐야 할지 모르겠다" 를 없애는 게 목적이다.
+   숫자를 더 넣지 않고, 이미 있는 숫자에 위계를 준다.     */
+
+/* 번호 붙은 질문형 섹션 제목 — 읽는 순서를 눈으로 알려 준다 */
+.qhd {{display:flex;align-items:center;gap:9px;
+      margin:26px 0 10px;padding-bottom:7px;
+      border-bottom:2px solid #EDEDF0;}}
+.qno {{flex:none;width:21px;height:21px;border-radius:50%;
+      background:{CHARCOAL};color:#fff;font-size:.68rem;font-weight:700;
+      display:flex;align-items:center;justify-content:center;}}
+.qtx {{font-size:1rem;font-weight:700;color:{CHARCOAL};letter-spacing:-.01em;}}
+.qsub {{font-size:.68rem;color:#9CA3AF;font-weight:400;margin-left:auto;}}
+/* 참고용 섹션은 번호를 회색으로 — 비중이 낮다는 걸 색으로 말한다 */
+.qno.ref {{background:#C7CAD1;}}
+
+/* 맨 위 요약 카드 */
+.sum {{background:#fff;border:1px solid #E4E4E7;border-radius:12px;
+      padding:15px 16px 13px;margin:2px 0 6px;}}
+.sumg {{display:grid;grid-template-columns:1fr 1fr;gap:11px 8px;}}
+.sumc {{text-align:center;padding:9px 4px;border-radius:8px;background:#FAFAFB;}}
+.sumk {{font-size:.66rem;color:#9CA3AF;letter-spacing:.04em;margin-bottom:3px;}}
+.sumv {{font-size:1.5rem;font-weight:800;line-height:1.1;}}
+.suml {{font-size:.7rem;font-weight:700;margin-top:2px;}}
+.sumsay {{margin-top:12px;padding:11px 13px;border-radius:8px;
+         background:#F7F7F8;border-left:3px solid {ORANGE};
+         font-size:.84rem;line-height:1.6;color:{CHARCOAL};}}
+
+/* 숫자를 키운다 — 핵심 % 는 멀리서도 읽히게 */
+.bigpct {{font-size:1.45rem;font-weight:800;line-height:1;}}
+.bigsub {{font-size:.7rem;color:#9CA3AF;font-weight:500;margin-left:5px;}}
+
+/* 참고용 블록은 통째로 눌러 놓는다 (수급처럼 예측력 없는 것) */
+.dim {{opacity:.82;}}
+.refbox {{background:#FAFAFB;border:1px dashed #E0E0E5;border-radius:9px;
+         padding:11px 13px;font-size:.75rem;color:#6B7280;line-height:1.55;}}
+
+/* 차트 아래 추세 한 줄 */
+.trendline {{background:#FAFAFB;border:1px solid #EDEDF0;border-radius:7px;
+            padding:7px 11px;font-size:.78rem;color:{CHARCOAL};
+            margin-bottom:6px;}}
+
+/* 대시보드 카드의 점수 줄 — 성장·장기·가격을 한눈에 */
+.srow {{display:flex;align-items:center;gap:8px;margin-top:6px;}}
+.sname {{flex:none;width:30px;font-size:.7rem;color:#9CA3AF;}}
+.snum {{flex:none;width:26px;font-size:.82rem;font-weight:800;text-align:right;}}
+.sbar {{flex:1;height:5px;background:#F1F1F2;border-radius:3px;overflow:hidden;}}
+.sfil {{height:5px;border-radius:3px;}}
+.stag {{flex:none;width:58px;font-size:.66rem;font-weight:700;text-align:right;}}
+.cfoot {{display:flex;justify-content:space-between;margin-top:9px;
+        padding-top:7px;border-top:1px solid #F1F1F2;font-size:.68rem;
+        color:#9CA3AF;}}
+.rankno {{display:inline-block;min-width:17px;height:17px;line-height:17px;
+         border-radius:4px;background:#F1F1F2;color:#6B7280;font-size:.62rem;
+         font-weight:700;text-align:center;margin-right:5px;}}
+
+/* 맨 위 시장 상황 바 */
+.macro {{display:flex;gap:8px;margin:0 0 8px;}}
+.mcell {{flex:1;background:#fff;border:1px solid #E4E4E7;border-radius:9px;
+        padding:7px 10px;display:flex;align-items:baseline;gap:5px;}}
+.mk2 {{font-size:.66rem;color:#9CA3AF;}}
+.mv2 {{font-size:1rem;font-weight:800;}}
+.ml2 {{font-size:.66rem;font-weight:700;margin-left:auto;}}
+.mnote {{font-size:.66rem;color:#9CA3AF;margin:-4px 0 8px;line-height:1.5;}}
+
+/* ③ 가격 판정 — 요구 성장률을 제일 크게 */
+.reqbox {{background:{CHARCOAL};color:#fff;border-radius:11px;
+         padding:14px 16px;margin:4px 0 10px;}}
+.reqk {{font-size:.66rem;letter-spacing:.06em;opacity:.7;margin-bottom:3px;}}
+.reqv {{font-size:1.6rem;font-weight:800;line-height:1.15;}}
+.reqsub {{font-size:.72rem;opacity:.72;line-height:1.5;margin-top:5px;}}
+.reqcmp {{margin-top:9px;padding-top:9px;border-top:1px solid rgba(255,255,255,.18);
+         font-size:.8rem;line-height:1.5;}}
+.fbox {{background:#fff;border:1px solid #E4E4E7;border-radius:11px;
+       padding:13px 15px;margin-bottom:10px;}}
+.fchips {{font-size:.78rem;color:{CHARCOAL};font-weight:600;margin-bottom:9px;}}
+.fbar {{position:relative;height:6px;border-radius:3px;margin:10px 0 3px;
+       background:linear-gradient(90deg,#FDE8D4,#F1F1F2,#DCE6F7);}}
+.fdot {{position:absolute;top:-3px;width:12px;height:12px;margin-left:-6px;
+       border-radius:50%;background:{CHARCOAL};border:2px solid #fff;
+       box-shadow:0 0 0 1px {CHARCOAL};}}
+.fends {{display:flex;justify-content:space-between;font-size:.66rem;
+        color:#9CA3AF;margin-bottom:8px;}}
+.fratio {{font-size:.84rem;line-height:1.5;color:{CHARCOAL};}}
+.fwarn {{margin-top:9px;padding:9px 11px;border-radius:7px;
+        background:#FFF4F4;border-left:3px solid #DC2626;
+        font-size:.75rem;color:#991B1B;line-height:1.55;}}
+.buybox {{padding:10px 12px;border-radius:8px;background:#F7F7F8;
+         border-left:3px solid {ORANGE};font-size:.86rem;line-height:1.55;
+         margin-bottom:8px;}}
+
+/* 다모다란 옆에 다른 점수를 같이 띄우는 줄 */
+.xref {{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0 2px;}}
+.xchip {{font-size:.7rem;padding:3px 9px;border-radius:99px;
+        background:#F1F1F2;color:#6B7280;font-weight:600;}}
 </style>""", unsafe_allow_html=True)
 
 
@@ -281,15 +378,45 @@ def damo_section(d):
     if items:
         got, avail, pct_ = pctile(items, DAMO_MAX)
         lab, col_ = damo_verdict(pct_)
-        st.markdown('<div class="sect">다모다란 관점</div>', unsafe_allow_html=True)
         st.markdown(f"""<div style="display:flex;justify-content:space-between;
           align-items:center;margin-bottom:6px">
           <span class="badge" style="background:{col_}">{lab}</span>
-          <span style="font-size:.9rem;font-weight:700;color:{col_}">
-          {got}/{avail} {pct_:.0f}%</span></div>
+          <span class="bigpct" style="color:{col_}">{pct_:.0f}<span
+            style="font-size:.85rem">%</span>
+            <span class="bigsub">{got}/{avail}</span></span></div>
           <div class="bar-bg"><div class="bar-fl"
           style="width:{pct_}%;background:{col_}"></div></div>""",
           unsafe_allow_html=True)
+
+        # ★ 2026-09-13 — 다른 두 점수를 여기 같이 띄운다.
+        #   CRDO 는 이 점수가 100 점인데 성장은 상위 43%, 장기는 상위 57% 다.
+        #   이 화면만 보면 "완벽한 회사" 로 읽힌다. 실제로 그렇게 읽은
+        #   사례가 있었다. 같은 자리에 놓아야 엇갈린다는 걸 알 수 있다.
+        chips = []
+        _ti, _li = score_ten(d), score_lt(d)
+        if _ti:
+            chips.append(f"성장 잠재력 {pctile(_ti, TEN_MAX)[2]:.0f}%")
+        if _li:
+            chips.append(f"장기 보유 {pctile(_li, LT_MAX)[2]:.0f}%")
+        _fp = footprint(d["ticker"])
+        if _fp:
+            chips.append(f"수급 {_fp['score']}")
+        if chips:
+            st.markdown('<div class="xref">'
+                        + "".join(f'<span class="xchip">{c}</span>' for c in chips)
+                        + '</div>', unsafe_allow_html=True)
+            if pct_ >= 75:
+                others = [p for p in (pctile(_ti, TEN_MAX)[2] if _ti else None,
+                                      pctile(_li, LT_MAX)[2] if _li else None)
+                          if p is not None]
+                if others and max(others) < 60:
+                    st.markdown(
+                        '<div class="refbox" style="border-color:#F0C9A0;'
+                        'background:#FFF9F2;color:#8A5A2B">'
+                        '자본 효율은 최상위인데 성장·장기 점수는 평범합니다. '
+                        '“좋은 회사”가 곧 “지금 사도 되는 주식”은 아닙니다. '
+                        '아래 ③번(가격)을 꼭 같이 보세요.</div>',
+                        unsafe_allow_html=True)
         # 5개 항목이 그대로 5개 축이 된다
         axes_damo = [(k, [k]) for k in DAMO_MAX]
         st.markdown(radar_svg(items, DAMO_MAX, None, pct_, col_, axes_damo),
@@ -305,7 +432,8 @@ def damo_section(d):
                     '"자본을 굴려 가치를 만들고 있는가" 를 봅니다.</p>',
                     unsafe_allow_html=True)
     else:
-        st.markdown('<div class="sect">다모다란 관점</div>', unsafe_allow_html=True)
+        st.markdown('<p class="note">채점할 데이터가 모자랍니다.</p>',
+                    unsafe_allow_html=True)
 
     with st.expander("세부 보기"):
         wacc = st.slider("자본비용 가정 (%)", 5.0, 15.0, 9.0, 0.5,
@@ -446,8 +574,8 @@ def damo_section(d):
                     unsafe_allow_html=True)
 
 
-def price_chart(t, currency="USD"):
-    """1년 일봉 캔들 + 20/50MA + 기간별 수익률."""
+def price_chart(t, currency="USD", band=None):
+    """1년 일봉 캔들 + 20/50MA + 추세선 + 진입밴드."""
     d = chart_data(t)
     if not d or not d["rows"]:
         return
@@ -513,6 +641,70 @@ def price_chart(t, currency="USD"):
             parts.append(f'<polyline points="{" ".join(pts)}" fill="none" '
                          f'stroke="{col}" stroke-width="{wdt}" opacity="0.85"/>')
 
+    # ── 추세선 (최소제곱 회귀)  2026-09-13 추가 ──
+    #   캔들과 이동평균만 있으면 "요즘 어떤가" 는 보여도
+    #   "1년을 통틀어 어느 쪽으로 가고 있나" 가 안 보인다.
+    #   종가에 직선 하나를 맞춰서 밑바탕 방향을 그린다.
+    #   이동평균과 달리 최근값에 끌려다니지 않는다.
+    trend_pct = None
+    try:
+        ys = [float(r["close"]) for r in rows]
+        m_ = n / 2.0 - 0.5                      # 평균 index
+        my = sum(ys) / n
+        sxx = sum((i - m_) ** 2 for i in range(n))
+        sxy = sum((i - m_) * (ys[i] - my) for i in range(n))
+        if sxx > 0:
+            b = sxy / sxx                        # 기울기 (봉당)
+            a = my - b * m_
+            y0, y1 = a, a + b * (n - 1)
+            if y0 > 0:
+                trend_pct = (y1 / y0 - 1) * 100
+            tcol = UP if b >= 0 else DN
+            parts.append(
+                f'<line x1="{x(0):.1f}" y1="{y(y0):.1f}" '
+                f'x2="{x(n-1):.1f}" y2="{y(y1):.1f}" stroke="{tcol}" '
+                f'stroke-width="1.6" stroke-dasharray="6 4" opacity="0.55"/>')
+    except Exception:
+        pass
+
+    # ── 진입밴드 (주황 띠)  2026-09-13 추가 ──
+    #   이 선은 차트에서 나온 게 아니다. DCF·PEG·애널 계산에서 나온 값을
+    #   사람이 저장해 둔 것이다. 이동평균 교차 같은 신호가 아니라
+    #   "내가 침착할 때 정해 둔 가격" 을 그려 주는 것뿐이다.
+    if valid_band(band):
+        try:
+            blo, bhi = float(band[0]), float(band[1])
+            ytop, ybot = y(max(blo, bhi)), y(min(blo, bhi))
+            ytop_c = max(PAD_T, min(PAD_T + ih, ytop))
+            ybot_c = max(PAD_T, min(PAD_T + ih, ybot))
+            if ybot_c > ytop_c:
+                parts.append(
+                    f'<rect x="{PAD_L}" y="{ytop_c:.1f}" width="{iw:.1f}" '
+                    f'height="{ybot_c-ytop_c:.1f}" fill="#EA580C" '
+                    f'fill-opacity="0.10"/>')
+            for yy in (ytop_c, ybot_c):
+                parts.append(f'<line x1="{PAD_L}" y1="{yy:.1f}" '
+                             f'x2="{PAD_L+iw:.1f}" y2="{yy:.1f}" '
+                             f'stroke="#EA580C" stroke-width="1" '
+                             f'stroke-dasharray="4 3" opacity="0.75"/>')
+            parts.append(f'<text x="{PAD_L+3}" y="{ybot_c+10:.1f}" '
+                         f'font-size="8.5" fill="#EA580C" '
+                         f'font-weight="700">진입밴드</text>')
+        except Exception:
+            pass
+
+    # ── 1년 고점 선 + 현재 위치 ──
+    try:
+        hi_v = max(r["high"] for r in rows)
+        yh = y(hi_v)
+        parts.append(f'<line x1="{PAD_L}" y1="{yh:.1f}" x2="{PAD_L+iw:.1f}" '
+                     f'y2="{yh:.1f}" stroke="#9CA3AF" stroke-width="0.9" '
+                     f'stroke-dasharray="2 3" opacity="0.7"/>')
+        parts.append(f'<text x="{PAD_L+3}" y="{yh-3:.1f}" font-size="8.5" '
+                     f'fill="#9CA3AF">1년 고점</text>')
+    except Exception:
+        pass
+
     # 날짜 라벨 (양 끝 + 가운데)
     for i in (0, n // 2, n - 1):
         anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
@@ -543,8 +735,33 @@ def price_chart(t, currency="USD"):
             f'</div>')
     st.markdown(f'<div style="display:flex;gap:2px;margin-bottom:6px">'
                 + "".join(cells) + "</div>", unsafe_allow_html=True)
-    st.markdown('<p class="note">주황 20일선 · 회색 50일선 · '
-                '빨강 상승 · 파랑 하락</p>', unsafe_allow_html=True)
+
+    # ── 추세 한 줄 요약  2026-09-13 추가 ──
+    bits = []
+    if trend_pct is not None:
+        tc = UP if trend_pct >= 0 else DN
+        word = ("꾸준히 우상향" if trend_pct >= 30 else
+                "완만한 우상향" if trend_pct >= 5 else
+                "방향 없음 (횡보)" if trend_pct > -5 else
+                "완만한 우하향" if trend_pct > -30 else "꾸준히 우하향")
+        bits.append(f'1년 추세 <b style="color:{tc}">{trend_pct:+.0f}%</b> · {word}')
+    try:
+        hi_v = max(r["high"] for r in rows)
+        cur_ = float(rows[-1]["close"])
+        if hi_v > 0:
+            off = (cur_ / hi_v - 1) * 100
+            oc = DN if off <= -20 else "#6B7280"
+            bits.append(f'고점 대비 <b style="color:{oc}">{off:+.0f}%</b>')
+    except Exception:
+        pass
+    if bits:
+        st.markdown(f'<div class="trendline">{" &nbsp;·&nbsp; ".join(bits)}</div>',
+                    unsafe_allow_html=True)
+
+    st.markdown('<p class="note">빨강 상승 · 파랑 하락 · 주황 20일선 · '
+                '회색 50일선 · <b>점선이 1년 추세선</b> (종가에 직선을 맞춘 것으로, '
+                '이동평균과 달리 최근값에 끌려다니지 않습니다)</p>',
+                unsafe_allow_html=True)
 
 
 def fp_section(fp):
@@ -594,6 +811,359 @@ def fp_section(fp):
 
 
 
+
+
+def item_label(k, mode):
+    """채점 항목 이름을 화면용으로 다듬는다.
+
+    ★ 2026-09-13 — '밸류에이션' 이 성장·장기 양쪽에 똑같은 이름으로 뜨는데
+      보는 것이 서로 다르다.
+        성장 잠재력 > 밸류에이션 : PEG (성장률 대비 PER 이 싼가)
+        장기 보유   > 밸류에이션 : PER 절대수준 (그냥 비싼가)
+      같은 이름이라 "왜 점수가 다르지?" 하게 된다. 표시만 구분한다.
+      채점 키(TEN_MAX/LT_MAX)는 건드리지 않으므로 점수는 그대로다.
+    """
+    if k == "밸류에이션":
+        return "밸류에이션 (성장 대비)" if mode == "ten" else "밸류에이션 (PER 절대)"
+    return k
+
+
+def macro_bar():
+    """맨 위 시장 상황 — VIX · 원달러.
+
+    ★ 2026-09-13 — 종목만 보다 보면 시장 전체가 어떤지 안 보인다.
+      표시 전용이다. 채점에는 연결하지 않는다.
+      특히 환율은 USD_KRW(시총 채점에 걸림)를 대체하지 않는다.
+    """
+    try:
+        m = macro()
+    except Exception:
+        return
+    if not m or (m.get("vix") is None and m.get("usdkrw") is None):
+        return
+
+    cells = []
+    v = m.get("vix")
+    if v is not None:
+        lab, col = vix_mood(v)
+        ch = m.get("vix_chg")
+        cells.append(("VIX", f"{v:.1f}", lab, col, ch))
+    r = m.get("usdkrw")
+    if r is not None:
+        ch = m.get("usdkrw_chg")
+        cells.append(("원/달러", f"{r:,.0f}", "", CHARCOAL, ch))
+
+    html = ""
+    for k, val, lab, col, ch in cells:
+        chtxt = ""
+        if ch is not None:
+            c2 = "#DC2626" if ch >= 0 else "#2563EB"
+            chtxt = (f'<span style="color:{c2};font-size:.66rem;'
+                     f'font-weight:600;margin-left:4px">{ch:+.1f}%</span>')
+        html += (f'<div class="mcell"><span class="mk2">{k}</span>'
+                 f'<span class="mv2" style="color:{col}">{val}</span>{chtxt}'
+                 + (f'<span class="ml2" style="color:{col}">{lab}</span>'
+                    if lab else "") + '</div>')
+
+    # 실험 기간에는 시총 채점 환율을 고정해 두었으므로, 벌어지면 알려 준다
+    note = ""
+    fixed = m.get("usdkrw_fixed")
+    if r and fixed and abs(r / fixed - 1) > 0.05:
+        note = (f'<div class="mnote">시총 환산은 {fixed:,}원 고정입니다 '
+                f'(현재 {r:,.0f}원). 실험 중 환율이 점수를 흔들지 않게 '
+                f'일부러 고정해 둔 값입니다.</div>')
+
+    st.markdown(f'<div class="macro">{html}</div>{note}', unsafe_allow_html=True)
+
+
+def qhead(no, text, sub="", ref=False):
+    """번호 붙은 질문형 섹션 제목.
+
+    ★ 2026-09-13 — 예전에는 '성장 잠재력' '시장 지표' 처럼
+      항목 이름만 있었다. 여덟 덩어리가 전부 똑같아 보여서
+      어디부터 읽어야 할지 알 수 없었다.
+      질문으로 바꾸고 번호를 붙여 읽는 순서를 눈으로 보여 준다.
+      참고용 섹션(ref)은 번호를 회색으로 해서 비중을 낮춘다.
+    """
+    st.markdown(
+        f'<div class="qhd"><span class="qno{" ref" if ref else ""}">{no}</span>'
+        f'<span class="qtx">{text}</span>'
+        + (f'<span class="qsub">{sub}</span>' if sub else "")
+        + '</div>', unsafe_allow_html=True)
+
+
+def price_verdict(d):
+    """③ 가격 판정.
+
+    ★ 2026-09-13 — 설계 의도를 적어 둔다.
+
+      맨 위에 오는 것은 '적정주가' 가 아니라
+        "지금 이 가격은 연 몇 % 성장을 요구하고 있는가"
+      이다. 이건 예측이 아니라 지금 가격에 박힌 기대치를 되읽은 것이라
+      미래를 안 맞혀도 참이다. 사람이 할 판단은 하나로 좁혀진다 —
+      "그 성장이 가능한가?"
+
+      적정가 세 개(DCF·PEG·애널)는 그 아래 '범위' 로만 둔다.
+      셋 다 정확하지 않기 때문이다. 오히려 셋이 크게 벌어져 있다는 사실
+      자체가 "이 회사는 값을 매기기 어렵다" 는 정보다.
+    """
+    px = d.get("price")
+    if not px:
+        return
+    cur = d.get("currency", "USD")
+    unit = "원" if cur == "KRW" else "$"
+
+    def fmt(v):
+        return f"{unit}{v:,.0f}" if cur == "KRW" else f"{unit}{v:,.2f}"
+
+    # ── 지금 가격이 요구하는 성장률 ──
+    req = implied_growth(d)
+    if req is not None:
+        act = d.get("growth")
+        per = d.get("per")
+        if act is not None:
+            gap = act - req
+            col = ORANGE if gap >= 0 else "#DC2626"
+            verdict = ("실제 성장이 요구치를 넘고 있습니다"
+                       if gap >= 0 else "실제 성장이 요구치에 못 미칩니다")
+            cmp_html = (f'<div class="reqcmp">실제 최근 성장률 '
+                        f'<b style="color:{col}">{act:.0f}%</b>'
+                        f'<span style="color:{col};font-weight:700">'
+                        f'  ({gap:+.0f}%p)</span><br>'
+                        f'<span style="color:{col};font-size:.76rem">'
+                        f'{verdict}</span></div>')
+        else:
+            cmp_html = ('<div class="reqcmp">실제 성장률을 못 구해 '
+                        '비교하지 못했습니다</div>')
+        st.markdown(
+            f'<div class="reqbox">'
+            f'<div class="reqk">지금 가격이 요구하는 것</div>'
+            f'<div class="reqv">연 {req:.0f}% 성장 <span '
+            f'style="font-size:.8rem;font-weight:600;color:#9CA3AF">'
+            f'× 10년</span></div>'
+            f'<div class="reqsub">PER {per:.1f} 를 정당화하려면 필요한 값입니다. '
+            f'예측이 아니라 지금 가격에 이미 들어 있는 기대치입니다.</div>'
+            f'{cmp_html}</div>', unsafe_allow_html=True)
+
+    # ── 적정가 범위 ──
+    wacc = st.session_state.get(f"fvwacc_{d['ticker']}", 9.0)
+    fr = fair_range(d, wacc=wacc)
+    items = fr.get("items") or []
+
+    if items:
+        chips = " · ".join(f"{k} {fmt(v)}" for k, v, _ in items)
+        vals = sorted(v for _, v, _ in items)
+        mid = (vals[len(vals)//2] if len(vals) % 2
+               else (vals[len(vals)//2 - 1] + vals[len(vals)//2]) / 2)
+        ratio = px / mid * 100
+
+        pos = fr.get("pos")
+        bar = ""
+        if pos is not None:
+            p = max(0, min(100, pos))
+            bar = (f'<div class="fbar"><div class="fdot" '
+                   f'style="left:{p:.0f}%"></div></div>'
+                   f'<div class="fends"><span>{fmt(fr["lo"])}</span>'
+                   f'<span>{fmt(fr["hi"])}</span></div>')
+
+        rcol = "#DC2626" if ratio > 115 else ORANGE if ratio < 85 else CHARCOAL
+        rtxt = ("적정가보다 비쌉니다" if ratio > 115
+                else "적정가보다 쌉니다" if ratio < 85 else "적정 범위 안입니다")
+
+        warn = ""
+        sp = fr.get("spread")
+        if sp and sp >= 3:
+            warn = ('<div class="fwarn">세 방법의 값이 '
+                    f'{sp:.1f}배나 벌어져 있습니다. '
+                    '이런 회사는 어떤 적정주가도 믿을 게 못 됩니다. '
+                    '위의 요구 성장률만 보세요.</div>')
+
+        st.markdown(
+            f'<div class="fbox"><div class="reqk">적정가 범위</div>'
+            f'<div class="fchips">{chips}</div>{bar}'
+            f'<div class="fratio">현재 {fmt(px)} — 적정가(중앙값 {fmt(mid)})의 '
+            f'<b style="color:{rcol}">{ratio:.0f}%</b><br>'
+            f'<span style="color:{rcol};font-size:.76rem">{rtxt}</span></div>'
+            f'{warn}</div>', unsafe_allow_html=True)
+
+        with st.expander("적정가 계산 손보기"):
+            st.slider("자본비용 (%)", 5.0, 15.0, 9.0, 0.5,
+                      key=f"fvwacc_{d['ticker']}",
+                      help="높일수록 적정가가 내려간다. 위험한 회사일수록 높게")
+            mos = st.slider("안전마진 (%)", 0, 50, 30, 5,
+                            key=f"mos_{d['ticker']}",
+                            help="적정가에서 이만큼 깎은 값을 매수가로 본다")
+            buy = mid * (1 - mos / 100)
+            st.markdown(
+                f'<div class="buybox">안전마진 {mos}% 적용 매수가 '
+                f'<b>{fmt(buy)}</b><br>'
+                f'<span style="font-size:.74rem;color:#6B7280">'
+                f'{"현재가가 이미 이 아래입니다" if px <= buy else f"현재가 {fmt(px)} — 아직 {(px/buy-1)*100:.0f}% 높습니다"}'
+                f'</span></div>', unsafe_allow_html=True)
+
+            # ── 계산값을 진입밴드로 저장 ──
+            #   ★ 2026-09-13 — "매수 신호" 를 만들지 않은 이유가 여기 있다.
+            #     차트에서 뽑은 신호는 이 도구의 백테스트에서 상관 -0.03 이었다.
+            #     대신 침착할 때 계산해 둔 가격을 저장해 두고,
+            #     시장이 거기 오면 알려 주는 쪽으로 만든다.
+            #     앱이 판단해 주는 게 아니라, 내가 한 판단을 지켜 주는 장치다.
+            st.markdown(f'<div class="note">아래 버튼을 누르면 '
+                        f'<b>{fmt(buy)} ~ {fmt(mid)}</b> 구간이 진입밴드로 저장됩니다. '
+                        f'차트에 주황 띠로 그려지고, 대시보드에서 이 구간에 '
+                        f'들어오면 알려 줍니다.</div>', unsafe_allow_html=True)
+            if st.button("이 가격대를 진입밴드로 저장", key=f"setband_{d['ticker']}",
+                         use_container_width=True):
+                stt = load_state()
+                tk = d["ticker"]
+                stt["bands"] = dict(stt.get("bands") or {})
+                # ★ band_text 가 소수점 2자리로 그리므로 저장도 2자리로 맞춘다.
+                #   4자리로 저장하면 관심종목 탭이 화면값(2자리)과 다르다고 보고
+                #   들어갈 때마다 조용히 덮어써서 저장이 한 번 더 일어난다.
+                stt["bands"][tk] = [round(buy, 2), round(mid, 2)]
+                added = tk not in stt["tickers"]
+                if added:
+                    stt["tickers"] = list(stt["tickers"]) + [tk]
+                save_state(stt)
+                st.success(f"{tk} 진입밴드 {fmt(buy)} ~ {fmt(mid)} 저장했습니다."
+                           + ("  관심종목에도 추가했습니다." if added else ""))
+                st.rerun()
+
+            # 가정을 전부 드러낸다 — 숫자가 정밀해 보이지 않게
+            for k, v, extra in items:
+                if k == "DCF" and extra:
+                    st.markdown(
+                        f'<div class="note">DCF 가정 — 성장 {extra["growth"]:.0f}% · '
+                        f'이익률 {extra["margin"]:.0f}% · 재투자 {extra["reinvest"]:.0f}% · '
+                        f'자본비용 {extra["wacc"]:.1f}% · 영구성장 {extra["terminal"]:.1f}%<br>'
+                        f'이 값의 <b>{extra["tv_share"]:.0f}%</b> 가 10년 뒤 이후 '
+                        f'가정에서 나옵니다'
+                        + (f'<br>{extra["note"]}' if extra.get("note") else "")
+                        + '</div>', unsafe_allow_html=True)
+            st.markdown('<div class="note">세 방법 모두 정확하지 않습니다. '
+                        '애널 목표가는 구조적으로 높게 잡히고, DCF 는 먼 미래 '
+                        '가정이 값을 결정하고, PEG 는 어림셈입니다. '
+                        '하나를 믿지 말고 범위로 보세요.</div>',
+                        unsafe_allow_html=True)
+    elif fr.get("dcf_fail"):
+        st.markdown(f'<div class="refbox">적정가를 계산하지 못했습니다 '
+                    f'({fr["dcf_fail"]}).</div>', unsafe_allow_html=True)
+
+
+def axis_pct(items, mx, axes, want):
+    """레이더의 특정 축 하나만 퍼센트로 뽑는다 (레이더와 같은 계산)."""
+    got = {k: s for k, s, _ in items}
+    for label, keys in axes:
+        if label != want:
+            continue
+        g = sum(got[k] for k in keys if k in got)
+        a = sum(mx[k] for k in keys if k in got)
+        return (g / a * 100) if a else None
+    return None
+
+
+def summary_card(d):
+    """맨 위 한 줄 요약.
+
+    ★ 2026-09-13 — 새로 채점하지 않는다. 이미 계산된 값을
+      한자리에 모아 보여 줄 뿐이다. 판단 기준(임계값)도
+      기존 ten_verdict / lt_verdict / fp_verdict 를 그대로 쓴다.
+
+      이게 필요한 이유:
+        CRDO 는 다모다란 100점인데 성장은 상위 43%, 수급은 11 이다.
+        화면 하나만 보고 "완벽한 회사" 로 읽는 사고를 막으려면
+        네 가지가 같은 자리에 있어야 한다.
+    """
+    ti = score_ten(d)
+    li = score_lt(d)
+    if not ti and not li:
+        return
+
+    cells = []
+
+    # ① 성장 잠재력
+    if ti:
+        _, _, tp = pctile(ti, TEN_MAX)
+        tag, col = ten_verdict(tp)
+        cells.append(("성장 잠재력", f"{tp:.0f}", "%", tag, col))
+    # ② 장기 보유 적합도
+    if li:
+        _, _, lp = pctile(li, LT_MAX)
+        tag, col = lt_verdict(lp)
+        cells.append(("장기 보유", f"{lp:.0f}", "%", tag, col))
+
+    # ③ 가격 — 레이더의 '주가매력' 축을 그대로 쓴다
+    ap = axis_pct(ti, TEN_MAX, AXES_TEN, "주가매력") if ti else None
+    if ap is not None:
+        # 표시용 눈대중이다. 채점에 쓰이는 기준이 아니다.
+        lab, col = (("싼 편", ORANGE) if ap >= 60 else
+                    ("보통", AMBER) if ap >= 40 else ("비싼 편", "#9CA3AF"))
+        cells.append(("가격 매력", f"{ap:.0f}", "%", lab, col))
+
+    # ④ 수급 — 예측력이 없다고 검증된 값이라 맨 뒤에 둔다
+    fp = footprint(d["ticker"])
+    if fp:
+        lab, col = fp_verdict(fp["score"])
+        cells.append(("수급 (참고)", f"{fp['score']}", "", lab, col))
+
+    if not cells:
+        return
+
+    grid = "".join(
+        f'<div class="sumc"><div class="sumk">{k}</div>'
+        f'<div class="sumv" style="color:{col}">{v}'
+        f'<span style="font-size:.8rem;font-weight:600">{unit}</span></div>'
+        f'<div class="suml" style="color:{col}">{lab}</div></div>'
+        for k, v, unit, lab, col in cells)
+
+    say = _summary_say(d, ti, li, ap, fp)
+    st.markdown(f'<div class="sum"><div class="sumg">{grid}</div>'
+                f'<div class="sumsay">{say}</div></div>',
+                unsafe_allow_html=True)
+
+
+def _summary_say(d, ti, li, ap, fp):
+    """네 숫자를 사람 말로 한 번 풀어 준다.
+
+    점수를 새로 만드는 게 아니라, 위 네 칸을 읽는 법을 적어 주는 것이다.
+    기준선은 전부 기존 verdict 함수의 경계를 그대로 쓴다.
+    """
+    parts = []
+
+    tp = pctile(ti, TEN_MAX)[2] if ti else None
+    lp = pctile(li, LT_MAX)[2] if li else None
+
+    # 회사 자체
+    best = max([x for x in (tp, lp) if x is not None], default=None)
+    if best is None:
+        parts.append("채점할 데이터가 모자랍니다.")
+    elif best >= 70:
+        parts.append("<b>회사 자체는 좋은 편입니다.</b>")
+    elif best >= 52:
+        parts.append("<b>회사는 무난한 편입니다.</b>")
+    else:
+        parts.append("<b>회사 점수가 낮습니다.</b> 싸 보여도 이유가 있을 수 있습니다.")
+
+    # 성장과 장기가 엇갈리는 경우 — 이게 꽤 자주 나오는데 설명이 없었다
+    if tp is not None and lp is not None and abs(tp - lp) >= 18:
+        hi, lo = ("성장", "장기") if tp > lp else ("장기", "성장")
+        parts.append(f"{hi} 쪽은 높고 {lo} 쪽은 낮습니다 — "
+                     f"{'지금 잘 나가지만 오래 갈지는 덜 확실' if hi == '성장' else '탄탄하지만 성장 속도는 느림'}.")
+
+    # 가격
+    if ap is not None:
+        if ap < 40 and best is not None and best >= 70:
+            parts.append("다만 <b>가격이 비쌉니다.</b> "
+                         "좋은 회사와 좋은 매수는 다른 문제입니다.")
+        elif ap < 40:
+            parts.append("가격도 싸지 않습니다.")
+        elif ap >= 60:
+            parts.append("가격은 괜찮은 편입니다.")
+
+    # 수급은 참고만
+    if fp and fp["score"] <= 30:
+        parts.append("수급은 나쁘지만, 검증 결과 수급은 예측력이 없었습니다(참고만).")
+
+    return " ".join(parts)
 
 
 def radar_svg(items, mx, mode, center_score, center_col, axes=None):
@@ -659,40 +1229,68 @@ def radar_svg(items, mx, mode, center_score, center_col, axes=None):
             f'{grid}{poly}{dots}{center}{labs}</svg></div>')
 
 
-def card(d, mode, band=None):
-    items = score_ten(d) if mode == "ten" else score_lt(d)
-    mx = TEN_MAX if mode == "ten" else LT_MAX
-    got, avail, p = pctile(items, mx)
-    tag, col = (ten_verdict(p) if mode == "ten" else lt_verdict(p))
+def card(d, mode, band=None, rank=None):
+    """대시보드 카드.
+
+    ★ 2026-09-13 — 예전에는 라디오로 고른 점수 하나만 보였다.
+      관심종목을 훑어보는 화면인데 성장을 보다가 장기를 보려면
+      토글을 눌러야 했고, 그러면 비교가 머릿속에서 끊긴다.
+      성장·장기·가격 세 줄을 한 카드에 넣어 토글 없이 비교되게 한다.
+      라디오는 이제 '무엇으로 정렬할까' 만 정한다.
+    """
+    ti, li = score_ten(d), score_lt(d)
+
+    rows = []
+    for nm, items, mx, vf in (("성장", ti, TEN_MAX, ten_verdict),
+                              ("장기", li, LT_MAX, lt_verdict)):
+        if not items:
+            continue
+        _, _, p = pctile(items, mx)
+        tag, col = vf(p)
+        rows.append((nm, p, tag, col))
+
+    # 가격 매력 — 성장 레이더의 '주가매력' 축 (성장 점수 안의 일부다)
+    ap = axis_pct(ti, TEN_MAX, AXES_TEN, "주가매력") if ti else None
+    if ap is not None:
+        tag, col = (("싼 편", ORANGE) if ap >= 60 else
+                    ("보통", AMBER) if ap >= 40 else ("비싼 편", "#9CA3AF"))
+        rows.append(("가격", ap, tag, col))
+
+    srows = "".join(
+        f'<div class="srow"><span class="sname">{nm}</span>'
+        f'<span class="snum" style="color:{col}">{p:.0f}</span>'
+        f'<span class="sbar"><span class="sfil" '
+        f'style="width:{max(0, min(100, p)):.0f}%;background:{col}"></span></span>'
+        f'<span class="stag" style="color:{col}">{tag}</span></div>'
+        for nm, p, tag, col in rows)
+
     ch = d["chg"]
     cls = "up" if (ch or 0) >= 0 else "dn"
     chtxt = f"{ch:+.2f}%" if ch is not None else ""
-    px = _px(d)
 
-    bandline = ""
+    # 아래 한 줄에 진입밴드와 수급을 회색으로 — 참고값이라는 걸 크기로 말한다
+    foot = []
     bs = band_status(d["price"], band)
     if bs:
         label, bcol, _ = bs
-        bandline = (f'<div class="bandline">'
-                    f'<span style="color:#9CA3AF">진입밴드 {band_text(band)}</span>'
-                    f'<span style="color:{bcol};font-weight:700">{label}</span></div>')
+        foot.append(f'<span>진입밴드 {band_text(band)} · '
+                    f'<b style="color:{bcol}">{label}</b></span>')
+    fp = footprint(d["ticker"])
+    if fp:
+        lab, _c = fp_verdict(fp["score"])
+        foot.append(f'<span>수급 {fp["score"]} · {lab}</span>')
+    footh = f'<div class="cfoot">{"".join(foot)}</div>' if foot else ""
+
+    rk = f'<span class="rankno">{rank}</span>' if rank else ""
 
     st.markdown(f"""<div class="card">
       <div class="card-hd">
-        <div><span class="tkr">{d['ticker']}</span>
+        <div>{rk}<span class="tkr">{d['ticker']}</span>
              <div class="nm">{(d['name'] or '')[:30]}</div></div>
         <div style="text-align:right">
-          <div class="px">{px}</div><div class="{cls}">{chtxt}</div></div>
+          <div class="px">{_px(d)}</div><div class="{cls}">{chtxt}</div></div>
       </div>
-      <div style="display:flex;justify-content:space-between;
-                  align-items:center;margin-top:11px">
-        <span class="badge" style="background:{col}">{tag}</span>
-        <span style="font-size:.8rem;color:#6B7280">{got}/{avail}
-              <b style="color:{col}">{p:.0f}%</b></span>
-      </div>
-      <div class="bar-bg"><div class="bar-fl"
-           style="width:{p:.0f}%;background:{col}"></div></div>
-      {bandline}{fp_line(footprint(d['ticker']))}
+      {srows}{footh}
     </div>""", unsafe_allow_html=True)
 
 
@@ -707,6 +1305,11 @@ def detail(d, band=None):
     e, dd_ = dday(d["earnings"])
     c3.metric("실적발표", f"D{-dd_:+d}" if dd_ is not None and -30 < dd_ < 300 else "-")
 
+    # ★ 2026-09-13 — 맨 위에 요약. 스크롤하기 전에 결론이 보이게 한다.
+    summary_card(d)
+
+    # ═══ ① 좋은 회사인가 ═══
+    qhead(1, "좋은 회사인가", "성장 · 장기 보유")
     for mode, title, mx, vf in (("ten", "성장 잠재력", TEN_MAX, ten_verdict),
                                 ("lt", "장기 보유 적합도", LT_MAX, lt_verdict)):
         items = score_ten(d) if mode == "ten" else score_lt(d)
@@ -718,23 +1321,32 @@ def detail(d, band=None):
         st.markdown(f"""<div style="display:flex;justify-content:space-between;
           align-items:center;margin-bottom:8px">
           <span class="badge" style="background:{col}">{tag}</span>
-          <span style="font-size:.9rem;font-weight:700;color:{col}">{p:.0f}%</span></div>
+          <span class="bigpct" style="color:{col}">{p:.0f}<span
+            style="font-size:.85rem">%</span><span class="bigsub">{got}/{avail}</span>
+          </span></div>
           <div class="bar-bg"><div class="bar-fl"
           style="width:{p:.0f}%;background:{col}"></div></div>""",
           unsafe_allow_html=True)
         st.markdown(radar_svg(items, mx, mode, p, col), unsafe_allow_html=True)
         rows = "".join(
-            f'<div class="metric"><span class="mk">{k}</span>'
+            f'<div class="metric"><span class="mk">{item_label(k, mode)}</span>'
             f'<span class="mv">{v} <span style="color:#9CA3AF;font-weight:400">'
             f'{s}/{mx[k]}</span></span></div>'
             for k, s, v in items)
         st.markdown(rows, unsafe_allow_html=True)
 
-    price_chart(d['ticker'], d.get('currency', 'USD'))
+    # ═══ ② 자본을 잘 굴리나 ═══
+    #   예전에는 맨 아래에 있었다. 다모다란 점수가 높게 나오는 종목일수록
+    #   위의 성장·장기 점수와 엇갈리는데, 끝까지 스크롤해야 보여서
+    #   그 엇갈림을 알아채기 어려웠다. 위로 올린다.
+    qhead(2, "자본을 잘 굴리나", "다모다란 관점")
+    damo_section(d)
 
-    fp_section(footprint(d['ticker']))
+    # ═══ ③ 지금 가격이 괜찮나 ═══
+    qhead(3, "지금 가격이 괜찮나", "요구 성장률 · 적정가 범위")
+    price_verdict(d)
+    price_chart(d['ticker'], d.get('currency', 'USD'), band=band)
 
-    st.markdown('<div class="sect">시장 지표</div>', unsafe_allow_html=True)
     rows = []
     bs = band_status(d["price"], band)
     if bs:
@@ -757,9 +1369,18 @@ def detail(d, band=None):
         f'<span class="mv">{v}</span></div>' for k, v in rows),
         unsafe_allow_html=True)
 
-    damo_section(d)
+    # ═══ ④ 요즘 분위기는 (참고) ═══
+    #   ★ 2026-09-13 — 백테스트 상관계수 -0.03. 예측력이 없다고
+    #     이미 검증된 값인데, 화면에서는 다른 점수와 똑같은 무게로
+    #     보였다. 번호를 회색으로 두고 맨 뒤로 내려 비중을 낮춘다.
+    qhead(4, "요즘 분위기는", "참고용", ref=True)
+    # fp_section 안에 이미 "상관 -0.03" 설명이 있으므로 여기서 또 쓰지 않는다
+    st.markdown('<div class="dim">', unsafe_allow_html=True)
+    fp_section(footprint(d['ticker']))
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<p class="note">체크리스트지 추천이 아닙니다. '
+    st.markdown('<p class="note" style="margin-top:20px">'
+                '체크리스트지 추천이 아닙니다. '
                 '자동 수집값은 누락·오류가 있을 수 있으니 최종 판단 전 '
                 '실적발표 원문을 확인하세요.</p>', unsafe_allow_html=True)
 
@@ -767,6 +1388,7 @@ def detail(d, band=None):
 def main():
     stt = load_state()
     watch, bands = stt["tickers"], stt["bands"]
+    macro_bar()          # ★ 2026-09-13 — 종목 전에 시장부터
     tab1, tab2, tab3 = st.tabs(["대시보드", "종목 조회", "관심종목"])
 
     with tab1:
@@ -783,8 +1405,9 @@ def main():
                     st.cache_data.clear()
                     st.rerun()
             with c_a:
-                mode = st.radio("관점", ["성장", "장기"], horizontal=True,
-                                label_visibility="collapsed")
+                mode = st.radio("정렬", ["성장", "장기"], horizontal=True,
+                                label_visibility="collapsed",
+                                help="어느 점수가 높은 순으로 줄 세울지")
             m = "ten" if mode == "성장" else "lt"
 
             # 데이터 수집 + 알림 판정
@@ -821,26 +1444,42 @@ def main():
                             f'{e:%m/%d} · <b>D-{dd_}</b> — 발표 후 다시 확인</div>',
                             unsafe_allow_html=True)
 
-            # 수급이 한쪽으로 크게 치우친 종목 표시.
-            # 백테스트 결과 수급 점수는 이후 수익률과 상관이 없었다(-0.03).
-            # 그래서 "사라/팔라"가 아니라 "왜 이런지 확인해 보라"는 안내로 쓴다.
-            # 매수 우위만이 아니라 매도 우위도 똑같이 보여 준다.
+            # 수급이 한쪽으로 크게 치우친 종목.
+            # ★ 2026-09-13 — 예전에는 종목마다 실적발표와 똑같은 크기의
+            #   배너를 하나씩 띄웠다. 관심종목이 늘면 화면이 배너로 덮이고,
+            #   무엇보다 수급은 검증 결과 예측력이 없었다(-0.03).
+            #   예측력 없는 값이 제일 큰 목소리를 내고 있었던 셈이다.
+            #   한 줄로 묶고 회색으로 낮춘다. 정보는 그대로 두되 크기만 줄인다.
+            hot, cold = [], []
             for d in data:
                 fp_ = footprint(d["ticker"])
                 if not fp_:
                     continue
-                sc_ = fp_["score"]
-                if sc_ >= 70:
-                    st.markdown(f'<div class="dday">◆ <b>{d["ticker"]}</b> 수급 {sc_} '
-                                f'· 6개월간 매수 우위 — 이유 확인 필요</div>',
-                                unsafe_allow_html=True)
-                elif sc_ <= 40:
-                    st.markdown(f'<div class="dday">◆ <b>{d["ticker"]}</b> 수급 {sc_} '
-                                f'· 6개월간 매도 우위 — 이유 확인 필요</div>',
-                                unsafe_allow_html=True)
+                if fp_["score"] >= 70:
+                    hot.append(f'{d["ticker"]} {fp_["score"]}')
+                elif fp_["score"] <= 40:
+                    cold.append(f'{d["ticker"]} {fp_["score"]}')
+            if hot or cold:
+                bits = []
+                if hot:
+                    bits.append("매수 우위 " + ", ".join(hot))
+                if cold:
+                    bits.append("매도 우위 " + ", ".join(cold))
+                st.markdown(
+                    '<div class="refbox" style="margin-bottom:8px">수급 치우침 — '
+                    + " · ".join(bits)
+                    + '<br><span style="font-size:.7rem">검증상 예측력이 없는 '
+                      '값입니다. 매매 근거가 아니라 "왜 이런지" 확인용입니다.'
+                      '</span></div>', unsafe_allow_html=True)
 
-            for d in data:
-                card(d, m, bands.get(d["ticker"]))
+            # ★ 2026-09-13 — 예전에는 관심종목에 넣은 순서 그대로였다.
+            #   훑어봐도 뭐가 위인지 안 보였다. 고른 점수로 줄 세운다.
+            def _key(d):
+                it = score_ten(d) if m == "ten" else score_lt(d)
+                mx = TEN_MAX if m == "ten" else LT_MAX
+                return -(pctile(it, mx)[2] if it else -1)
+            for i_, d in enumerate(sorted(data, key=_key), 1):
+                card(d, m, bands.get(d["ticker"]), rank=i_)
                 if st.button(f"{d['ticker']} 상세", key=f"b{d['ticker']}",
                              use_container_width=True):
                     st.session_state["sel"] = d["ticker"]

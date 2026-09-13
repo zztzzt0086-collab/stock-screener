@@ -1358,6 +1358,250 @@ def fp_verdict(score):
 
 
 # ═════════════════════════════════════════════════════════════
+# 시장 상황 (VIX · 원달러)          2026-09-13 추가
+#
+#   ★ 표시 전용이다. 채점에는 한 글자도 연결하지 않는다.
+#
+#   특히 환율은 절대 USD_KRW 를 대체하면 안 된다.
+#   USD_KRW 는 mcap_krw 를 만들고, mcap_krw 는 score_ten 의
+#   "시가총액" 15점에 1천억/5천억/2조/10조 라는 딱딱한 경계로 걸려 있다.
+#   환율을 실시간으로 물리면 회사는 그대로인데 원화가 움직였다는 이유만으로
+#   종목이 경계를 넘나들며 점수가 매일 달라진다.
+#   6개월 순위 실험에서 그건 그냥 잡음이다. 실험 기간에는 고정이 맞다.
+#   (실험이 끝나면 v2 에서 다시 볼 것)
+# ═════════════════════════════════════════════════════════════
+
+@cache(600)
+def macro():
+    """VIX 와 원달러 환율. 10분 캐시.
+
+    각각 따로 try 로 감싼다. 하나가 실패해도 나머지는 보여 줘야 하고,
+    둘 다 실패해도 앱은 멀쩡히 열려야 한다.
+    """
+    out = {"vix": None, "vix_chg": None, "usdkrw": None, "usdkrw_chg": None,
+           "asof": None, "usdkrw_fixed": USD_KRW}
+
+    def last_two(sym, period="10d"):
+        h = yf.Ticker(sym).history(period=period)
+        if h is None or len(h) < 1:
+            return None, None, None
+        c = h["Close"].dropna()
+        if not len(c):
+            return None, None, None
+        cur = float(c.iloc[-1])
+        prev = float(c.iloc[-2]) if len(c) >= 2 else None
+        chg = ((cur / prev - 1) * 100) if prev and prev > 0 else None
+        return cur, chg, str(c.index[-1])[:16]
+
+    try:
+        v, ch, ts = last_two("^VIX")
+        out["vix"], out["vix_chg"] = v, ch
+        out["asof"] = ts or out["asof"]
+    except Exception:
+        pass
+    try:
+        r, ch, ts = last_two("USDKRW=X")
+        out["usdkrw"], out["usdkrw_chg"] = r, ch
+        out["asof"] = ts or out["asof"]
+    except Exception:
+        pass
+    return out
+
+
+def vix_mood(v):
+    """VIX 를 말로. 채점 아님, 읽기 도우미."""
+    if v is None:
+        return "-", "#9CA3AF"
+    if v >= 30:
+        return "공포", "#2563EB"
+    if v >= 22:
+        return "불안", "#5B7FC7"
+    if v >= 17:
+        return "보통", "#9CA3AF"
+    if v >= 13:
+        return "안정", AMBER
+    return "과열 주의", ORANGE
+
+
+# ═════════════════════════════════════════════════════════════
+# 가치 평가          2026-09-13 추가
+#
+#   ★ 채점(score_ten / score_lt / score_damo)과 완전히 별개다.
+#     SCORE_VERSION 에 영향이 없다. 어떤 채점 함수도 이 아래를 호출하지 않는다.
+#
+#   중심 생각:
+#     "적정주가를 맞힌다" 는 애초에 되는 일이 아니다.
+#     DCF 는 가치의 대부분이 10년 뒤 가정에서 나오고,
+#     애널 목표가는 구조적으로 높게 잡히고,
+#     PEG 적정가는 근거 없는 어림셈이다.
+#
+#     그래서 중심에 두는 것은 예측이 아니라 '사실 진술' 이다.
+#       "지금 이 가격은 연 몇 % 성장을 요구하고 있는가"
+#     이건 미래를 안 맞혀도 참이다. 판단은 사람이 한다.
+#     적정가 세 개는 그 아래에 '범위' 로만 둔다.
+# ═════════════════════════════════════════════════════════════
+
+def implied_growth(d, target_peg=1.0):
+    """지금 주가가 요구하는 연 성장률 (%).
+
+    PEG = PER / 성장률 이므로, PEG 가 target 이 되는 성장률은
+      성장률 = PER / target
+    예측이 아니다. 지금 가격에 이미 박혀 있는 기대치를 되읽는 것뿐이다.
+    """
+    per = d.get("per")
+    if not per or per <= 0 or target_peg <= 0:
+        return None
+    return per / target_peg
+
+
+def peg_fair_price(d, target_peg=1.0):
+    """PEG 가 target 이 되는 주가.
+
+    피터 린치식 어림셈이다. 이론적 근거는 약하다.
+    범위의 한쪽 끝으로만 쓴다.
+    """
+    per, g, px = d.get("per"), d.get("growth"), d.get("price")
+    if not (per and g and px) or per <= 0 or g <= 0:
+        return None
+    return px * (g * target_peg) / per
+
+
+def dcf_value(d, growth=None, margin=None, wacc=9.0, terminal=3.0,
+              tax=21.0, years=10, reinvest=None):
+    """다모다란식 간단 DCF. cli.py 의 dcf 명령과 같은 뼈대.
+
+    ★ 통화 문제를 피하려고 '현재 시총 대비 배수' 로 계산한 뒤
+      마지막에 현재가에 곱한다.
+      매출은 재무통화(TWD 등), 주가는 상장통화(USD) 인 ADR 에서
+      금액끼리 직접 비교하면 값이 수백 배로 틀어진다.
+      배수로 가면 통화가 약분되어 그 사고가 원천적으로 안 난다.
+
+    가정을 안 주면 회사 자기 숫자로 채운다:
+      · 성장률  = 실제 매출 CAGR (단 10년 가정이므로 30% 로 자른다)
+      · 이익률  = 현재 영업이익률
+      · 재투자율 = 성장률 / ROIC   ← 다모다란의 핵심 연결고리
+                  ("재투자 없는 성장은 없다")
+
+    돌려주는 dict 의 note 에 무엇을 어떻게 가정했는지 전부 적는다.
+    """
+    px = d.get("price")
+    revs = d.get("revs") or []
+    mcap = d.get("mcap_fin") or d.get("mcap_raw")
+    if not px or not revs or not mcap or mcap <= 0:
+        return {"price": None, "note": "매출 또는 시가총액을 못 구함"}
+
+    rev0 = float(revs[-1])
+    if rev0 <= 0:
+        return {"price": None, "note": "매출이 0 이하"}
+
+    notes = []
+
+    # ── 성장률 ──
+    if growth is None:
+        g_raw = d.get("growth")
+        if g_raw is None:
+            return {"price": None, "note": "매출 성장률을 못 구함"}
+        growth = g_raw
+        if growth > 30:
+            notes.append(f"성장률 {g_raw:.0f}% → 30% 로 낮춰 잡음 "
+                         f"(10년 내내 {g_raw:.0f}% 는 비현실적)")
+            growth = 30.0
+        if growth < 0:
+            notes.append(f"성장률이 음수({g_raw:.0f}%) — 0% 로 잡음")
+            growth = 0.0
+
+    # ── 이익률 ──
+    if margin is None:
+        m_raw = d.get("margin")
+        if m_raw is None:
+            return {"price": None, "note": "영업이익률을 못 구함"}
+        if m_raw <= 0:
+            return {"price": None,
+                    "note": f"영업이익률이 적자({m_raw:.0f}%) — "
+                            f"목표 이익률을 사람이 정해야 계산됨"}
+        margin = m_raw
+
+    # ── 재투자율 = 성장률 / ROIC (다모다란) ──
+    if reinvest is None:
+        rc = d.get("roic")
+        if rc and rc > 0:
+            reinvest = min(90.0, max(0.0, growth / rc * 100))
+            notes.append(f"재투자율 {reinvest:.0f}% = 성장률 {growth:.0f}% "
+                         f"÷ ROIC {rc:.0f}%")
+        else:
+            reinvest = 40.0
+            notes.append("ROIC 를 못 구해 재투자율 40% 로 가정")
+
+    if wacc <= terminal:
+        return {"price": None,
+                "note": f"자본비용({wacc:.1f}%)이 영구성장률({terminal:.1f}%) 이하"}
+
+    g, mgn = growth / 100, margin / 100
+    tx, w, ri, gt = tax / 100, wacc / 100, reinvest / 100, terminal / 100
+
+    rev, pv_sum, fcf_last = rev0, 0.0, 0.0
+    for i in range(1, years + 1):
+        rev *= (1 + g)
+        fcf = rev * mgn * (1 - tx) * (1 - ri)
+        pv_sum += fcf / ((1 + w) ** i)
+        fcf_last = fcf
+
+    tv = fcf_last * (1 + gt) / (w - gt)
+    tv_pv = tv / ((1 + w) ** years)
+    ev = pv_sum + tv_pv
+    eq = ev + (d.get("netcash") or 0)
+
+    if ev <= 0:
+        return {"price": None, "note": "계산된 가치가 0 이하"}
+
+    ratio = eq / mcap
+    return {"price": px * ratio,
+            "ratio": ratio,
+            "tv_share": tv_pv / ev * 100,
+            "growth": growth, "margin": margin, "wacc": wacc,
+            "terminal": terminal, "reinvest": reinvest, "years": years,
+            "note": " · ".join(notes) if notes else None}
+
+
+def fair_range(d, wacc=9.0, target_peg=1.0):
+    """적정가 세 가지를 모아 범위로.
+
+    하나를 믿는 게 아니라 '얼마나 벌어져 있나' 를 보는 게 목적이다.
+    세 값이 크게 엇갈리면 그 자체가 "값을 매기기 어려운 회사" 라는 신호다.
+    """
+    px = d.get("price")
+    out = {"price": px, "items": [], "lo": None, "hi": None,
+           "spread": None, "pos": None}
+    if not px:
+        return out
+
+    dcf = dcf_value(d, wacc=wacc)
+    if dcf.get("price") and dcf["price"] > 0:
+        out["items"].append(("DCF", dcf["price"], dcf))
+    else:
+        out["dcf_fail"] = dcf.get("note")
+
+    pf = peg_fair_price(d, target_peg)
+    if pf and pf > 0:
+        out["items"].append(("PEG", pf, None))
+
+    tg = d.get("tgt")
+    if tg and tg > 0:
+        out["items"].append(("애널", float(tg), None))
+
+    vals = [v for _, v, _ in out["items"]]
+    if vals:
+        out["lo"], out["hi"] = min(vals), max(vals)
+        # 최저 대비 최고가 몇 배인가 — 3배 넘게 벌어지면 경고할 값이다
+        out["spread"] = out["hi"] / out["lo"] if out["lo"] > 0 else None
+        if out["hi"] > out["lo"]:
+            out["pos"] = (px - out["lo"]) / (out["hi"] - out["lo"]) * 100
+        else:
+            out["pos"] = 50.0
+    return out
+
+
+# ═════════════════════════════════════════════════════════════
 # 레이더 차트 (5축) — 세부 항목을 5개 축으로 묶어서 SVG로 그림
 # ═════════════════════════════════════════════════════════════
 
