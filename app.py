@@ -116,8 +116,10 @@ def load_state():
         if isinstance(raw, list):                       # 구버전 호환
             stt = {"tickers": raw, "bands": {}}
         else:
+            # 모양이 깨진 밴드는 여기서 걸러 낸다. 안 그러면 다음 실행에서
+            # band_status 가 터져 앱이 안 열린다. (2026-09-13)
             stt = {"tickers": raw.get("tickers", []),
-                   "bands": raw.get("bands", {})}
+                   "bands": clean_bands(raw.get("bands"))}
     except Exception:
         stt = {"tickers": [], "bands": {}}
     st.session_state["wstate"] = stt
@@ -127,31 +129,82 @@ def load_state():
 def save_state(stt):
     st.session_state["wstate"] = stt
     try:
-        with open(WATCHFILE, "w", encoding="utf-8") as f:
+        # 임시 파일에 쓴 뒤 바꿔치기 — 쓰다 끊겨도 기존 목록이 살아남는다
+        tmp = WATCHFILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(stt, f, ensure_ascii=False)
-    except Exception:
-        pass
+        os.replace(tmp, WATCHFILE)
+    except Exception as e:
+        # 조용히 넘기면 저장된 줄 알고 있다가 세션이 끝날 때 잃는다.
+        # 클라우드에서는 원래 재배포 때 날아가므로 백업을 권한다. (2026-09-13)
+        st.warning(f"관심종목을 파일에 저장하지 못했습니다 ({e}). "
+                   f"아래 백업 문자열을 복사해 두세요.")
+
+
+def _px(d):
+    """현재가 표기. 원화는 소수점 없이, 그 외는 두 자리.
+
+    ★ 2026-09-13 — 예전에는 f"{p:,.2f}" 로 고정이라
+      삼성전자가 '71,500.00' 으로 나왔다. cli.py 와 같은 규칙이다.
+    """
+    p = d.get("price")
+    if not p:
+        return "-"
+    return f"{p:,.0f}" if d.get("currency") == "KRW" else f"{p:,.2f}"
 
 
 def parse_band(s):
-    """'225-250' / '225~250' / '158' → [lo, hi], 실패 시 None"""
+    """'225-250' / '225~250' / '158' → [lo, hi], 실패 시 None
+
+    ★ 2026-09-13 — 예전 방식은 split('-') 으로 빈 조각을 버려서
+      '-5' 가 [5, 5] 가 되고 '225-250-300' 이 [225, 250] 으로
+      조용히 바뀌었다. 0 도 그대로 통과해 band_status 에서
+      ZeroDivisionError 를 냈고, 그 값이 watchlist.json 에 저장돼
+      앱이 아예 안 열리는 상태가 됐다.
+      이제 형식에 정확히 맞는 양수만 받는다.
+    """
+    import re as _re
     s = (s or "").replace("~", "-").replace(",", "").strip()
     if not s:
         return None
-    parts = [p.strip() for p in s.split("-") if p.strip()]
+    m = _re.fullmatch(r"(\d+(?:\.\d+)?)(?:\s*-\s*(\d+(?:\.\d+)?))?", s)
+    if not m:
+        return None
     try:
-        if len(parts) == 1:
-            v = float(parts[0])
-            return [v, v]
-        lo, hi = float(parts[0]), float(parts[1])
-        if lo > hi:
-            lo, hi = hi, lo
-        return [lo, hi]
+        lo = float(m.group(1))
+        hi = float(m.group(2)) if m.group(2) else lo
     except Exception:
         return None
+    if lo <= 0 or hi <= 0:          # 0 이나 음수는 밴드가 될 수 없다
+        return None
+    return [min(lo, hi), max(lo, hi)]
+
+
+def valid_band(b):
+    """저장된 밴드가 쓸 수 있는 값인지. 백업 복원으로 들어온 값 방어용."""
+    return (isinstance(b, (list, tuple)) and len(b) == 2
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                    and x > 0 for x in b))
+
+
+def clean_bands(raw):
+    """백업에서 온 bands 를 걸러 낸다.
+
+    ★ 복원 칸에 손으로 고친 백업을 붙여넣는 일이 잦은데
+      {"MU": 250} 처럼 모양이 다르면 다음 실행에서 앱이 통째로 죽었다.
+      쓸 수 있는 것만 남긴다.
+    """
+    out = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if valid_band(v):
+                out[str(k)] = [float(v[0]), float(v[1])]
+    return out
 
 
 def band_text(band):
+    if not valid_band(band):
+        return ""
     lo, hi = band
     f = lambda v: f"{v:,.0f}" if v == int(v) else f"{v:,.2f}"
     return f(lo) if lo == hi else f"{f(lo)}~{f(hi)}"
@@ -159,7 +212,10 @@ def band_text(band):
 
 def band_status(price, band):
     """(라벨, 색, 밴드 안 여부) — 밴드 미설정/가격 없음이면 None"""
-    if not band or not price:
+    # ★ 2026-09-13 — lo/hi 로 나누는데 0 이나 잘못된 모양을 거르지 않아
+    #   ZeroDivisionError / TypeError 로 앱 전체가 죽었다.
+    #   그 값이 파일에 먼저 저장되므로 재시작해도 안 살아났다.
+    if not price or not valid_band(band):
         return None
     lo, hi = band
     if lo <= price <= hi:
@@ -214,7 +270,14 @@ def damo_section(d):
     GREEN, RED, GRAY = "#16A34A", "#DC2626", "#6B7280"
 
     # ── 점수 (기존 채점과 별개) ──
-    items = score_damo(d)
+    # ★ 2026-09-13 — 예전에는 여기서 score_damo(d) 를 자본비용 기본값(9%)
+    #   으로만 매겼다. 아래 '세부 보기' 의 슬라이더를 12% 로 올려도
+    #   위 점수는 9% 그대로여서, 같은 화면에서 초과수익이 (-) 인데
+    #   ROIC 초과수익 점수는 만점인 모순이 보였다.
+    #   슬라이더 값은 st.session_state 에 남으므로 그걸 먼저 읽어
+    #   점수와 세부 보기가 같은 가정을 쓰게 한다.
+    wacc = st.session_state.get(f"wacc_{d['ticker']}")
+    items = score_damo(d, wacc)
     if items:
         got, avail, pct_ = pctile(items, DAMO_MAX)
         lab, col_ = damo_verdict(pct_)
@@ -247,7 +310,8 @@ def damo_section(d):
     with st.expander("세부 보기"):
         wacc = st.slider("자본비용 가정 (%)", 5.0, 15.0, 9.0, 0.5,
                          key=f"wacc_{d['ticker']}",
-                         help="보통 8~10%. 위험한 회사일수록 높게 잡는다")
+                         help="보통 8~10%. 위험한 회사일수록 높게 잡는다. "
+                              "위 다모다란 점수도 이 값을 따라 다시 매겨진다")
 
         blocks = []
 
@@ -345,7 +409,9 @@ def damo_section(d):
                          f'{"개선 중" if tr >= 3 else "악화 중" if tr < -3 else "횡보"}',
                          None))
         if rows:
-            blocks.append(("3. 어떻게 크고 있나", rows, None))
+            blocks.append(("3. 어떻게 크고 있나", rows,
+                       "여기 영업이익률은 연간입니다. 성장 잠재력 점수의 "
+                       "'이익률 추세' 는 분기 기준이라 숫자가 다릅니다."))
 
         # 4. 주가가 기대하는 것
         rows = []
@@ -396,9 +462,12 @@ def price_chart(t, currency="USD"):
 
     lo = min(r["low"] for r in rows)
     hi = max(r["high"] for r in rows)
-    if hi <= lo:
-        return
     span = hi - lo
+    if span <= 0:
+        # ★ 2026-09-13 — 1년 내내 고가=저가 (거래정지·데이터 이상) 면
+        #   예전에는 그냥 return 이라 차트가 말없이 사라졌다.
+        #   왜 없는지 알 수 없으니, 폭을 억지로 만들어 평평한 선이라도 그린다.
+        span = abs(hi) * 0.02 or 1.0
     lo -= span * 0.04
     hi += span * 0.04
     span = hi - lo
@@ -598,7 +667,7 @@ def card(d, mode, band=None):
     ch = d["chg"]
     cls = "up" if (ch or 0) >= 0 else "dn"
     chtxt = f"{ch:+.2f}%" if ch is not None else ""
-    px = f"{d['price']:,.2f}" if d["price"] else "-"
+    px = _px(d)
 
     bandline = ""
     bs = band_status(d["price"], band)
@@ -632,7 +701,7 @@ def detail(d, band=None):
     st.caption(f"{d['name']}  ·  {d['sector'] or ''}")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("현재가", f"{d['price']:,.2f}" if d["price"] else "-",
+    c1.metric("현재가", _px(d),
               f"{d['chg']:+.2f}%" if d["chg"] is not None else None)
     c2.metric("시총", won(d["mcap_krw"]))
     e, dd_ = dday(d["earnings"])
@@ -740,6 +809,9 @@ def main():
             # 진입밴드 배너 (주황) — 실적 배너보다 위
             for tk_, px_, bd_ in entries:
                 st.markdown(f'<div class="entry">◆ <b>{tk_}</b> 진입밴드 도달 — '
+                            f'{px_:,.0f} (밴드 {band_text(bd_)}) · 분할매수 계획 확인</div>'
+                            if (bd_ and bd_[0] >= 1000) else
+                            f'<div class="entry">◆ <b>{tk_}</b> 진입밴드 도달 — '
                             f'{px_:,.2f} (밴드 {band_text(bd_)}) · 분할매수 계획 확인</div>',
                             unsafe_allow_html=True)
 
@@ -758,11 +830,11 @@ def main():
                 if not fp_:
                     continue
                 sc_ = fp_["score"]
-                if sc_ >= 75:
+                if sc_ >= 70:
                     st.markdown(f'<div class="dday">◆ <b>{d["ticker"]}</b> 수급 {sc_} '
                                 f'· 6개월간 매수 우위 — 이유 확인 필요</div>',
                                 unsafe_allow_html=True)
-                elif sc_ <= 25:
+                elif sc_ <= 40:
                     st.markdown(f'<div class="dday">◆ <b>{d["ticker"]}</b> 수급 {sc_} '
                                 f'· 6개월간 매도 우위 — 이유 확인 필요</div>',
                                 unsafe_allow_html=True)
@@ -856,8 +928,16 @@ def main():
                     if isinstance(raw, list):
                         stt2 = {"tickers": raw, "bands": {}}
                     else:
+                        bad_n = 0
+                        rb_ = raw.get("bands")
+                        if isinstance(rb_, dict):
+                            bad_n = len(rb_) - len(clean_bands(rb_))
                         stt2 = {"tickers": raw.get("tickers", []),
-                                "bands": raw.get("bands", {})}
+                                "bands": clean_bands(rb_)}
+                        if bad_n:
+                            st.warning(f"밴드 {bad_n}개는 형식이 맞지 않아 "
+                                       f"빼고 복원했습니다. "
+                                       f'형식: {{"MU": [225, 250]}}')
                     save_state(stt2)
                     st.rerun()
                 except Exception:

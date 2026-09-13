@@ -161,8 +161,13 @@ def score_ten(d):
     v = d["debt"]
     if v is not None:
         asof = f" ({d['debt_asof']})" if d.get("debt_asof") else ""
-        o.append(("부채비율", 10 if v < 50 else 8 if v < 100 else 4 if v < 200 else 0,
-                  f"{v:.0f}%{asof}"))
+        # 음수 = 자기자본이 음수(자본잠식). 기준이 전부 "작을수록 좋다" 라
+        # 그냥 두면 최악의 회사가 만점을 받는다. (2026-09-13)
+        if v < 0:
+            o.append(("부채비율", 0, f"자본잠식 ({v:.0f}%){asof}"))
+        else:
+            o.append(("부채비율", 10 if v < 50 else 8 if v < 100 else 4 if v < 200 else 0,
+                      f"{v:.0f}%{asof}"))
     v = d["insider"]
     if v is not None:
         o.append(("내부자지분", 10 if v >= 30 else 8 if v >= 15 else 4 if v >= 5 else 1,
@@ -248,7 +253,7 @@ def score_ten(d):
         note, dc, bv = "", d.get("debt_chg"), d.get("bvps_chg")
         de_now = d.get("debt")
         # 부채비율 자체가 낮으면(30% 미만) 증가율이 커도 위험 신호가 아니다.
-        if de_now is not None and de_now < 30:
+        if de_now is not None and 0 <= de_now < 30:
             dc = None
         if v <= -3 and dc is not None and dc >= 50:
             # 주식수는 줄었는데 빚이 크게 늘었다 = 차입 자사주매입.
@@ -330,6 +335,13 @@ def score_lt(d):
         t = " → ".join(f"{x:.0f}" for x in r)
         o.append(("자본수익률", 15 if avg >= 20 and lo >= 12 else 12 if avg >= 15 and lo >= 8
                   else 8 if avg >= 10 else 4 if avg >= 5 else 0, f"[{t}%]"))
+    elif d.get("eq_negative"):
+        # ★ 2026-09-13 — roes 는 자기자본이 양수인 해만 담는다.
+        #   그래서 자본잠식 회사는 이 항목이 통째로 빠지고,
+        #   만점 분모가 15점 줄어 % 가 오히려 올라갔다.
+        #   "회사가 나빠서 항목이 빠지고, 그래서 점수가 좋아진다" 는
+        #   거꾸로 된 일이라 0점으로 넣어 분모에 남긴다.
+        o.append(("자본수익률", 0, "자기자본 잠식"))
     rv = d["revs"]
     if rv and len(rv) >= 3:
         drops = sum(1 for a, b in zip(rv, rv[1:]) if b < a)
@@ -347,7 +359,7 @@ def score_lt(d):
                 else 3 if v <= 4 else 0)
         note, dc = "", d.get("debt_chg")
         de_now = d.get("debt")
-        if de_now is not None and de_now < 30:
+        if de_now is not None and 0 <= de_now < 30:
             dc = None
         if v <= -1 and dc is not None and dc >= 50:
             base = min(base, 5)
@@ -364,7 +376,9 @@ def score_lt(d):
     de, cov = d["debt"], d["cover"]
     if de is not None:
         t = f"부채 {de:.0f}%" + (f", 이자보상 {cov:.1f}배" if cov else "")
-        if cov is not None and cov <= 0:      # 영업적자 = 이자를 못 갚는 상태
+        if de < 0:                            # 자본잠식 (2026-09-13)
+            o.append(("부채 안전성", 0, f"자본잠식 ({de:.0f}%)"))
+        elif cov is not None and cov <= 0:     # 영업적자 = 이자를 못 갚는 상태
             o.append(("부채 안전성", 3 if de < 50 else 2 if de < 100 else 0,
                       t + " · 영업적자"))
         else:
@@ -421,8 +435,11 @@ def score_damo(d, wacc=None):
     # ④ 망하지 않을 여력 (10점)
     de = d.get("debt")
     if de is not None:
-        sc = 10 if de <= 30 else 7 if de <= 60 else 4 if de <= 100 else 0
-        o.append(("부채 안전성", sc, f"부채비율 {de:.0f}%"))
+        if de < 0:                            # 자본잠식 (2026-09-13)
+            o.append(("부채 안전성", 0, f"자본잠식 ({de:.0f}%)"))
+        else:
+            sc = 10 if de <= 30 else 7 if de <= 60 else 4 if de <= 100 else 0
+            o.append(("부채 안전성", sc, f"부채비율 {de:.0f}%"))
 
     # ⑤ 숫자가 튀어 좋아 보이는 함정 (10점)
     #    PEG 0.2 미만 = 적자→흑자 전환 착시
@@ -542,16 +559,34 @@ def fetch(t):
         for dt in rev.index:
             if dt in op.index and float(rev[dt]) > 0:
                 margins.append(float(op[dt])/float(rev[dt])*100)
+    # ROE 는 자기자본이 양수인 해만 담는다(음수로 나누면 부호가 뒤집힌다).
+    # 다만 "자본잠식이라 빠진 것" 과 "데이터가 없어 빠진 것" 은 다르므로
+    # 전자를 score_lt 가 알아볼 수 있도록 표시해 둔다. (2026-09-13)
     roes = []
+    eq_negative = False
     if ni_a is not None and eq is not None:
-        for dt in ni_a.index:
-            if dt in eq.index and float(eq[dt]) > 0:
+        pairs_eq = [dt for dt in ni_a.index if dt in eq.index]
+        for dt in pairs_eq:
+            if float(eq[dt]) > 0:
                 roes.append(float(ni_a[dt])/float(eq[dt])*100)
+        eq_negative = bool(pairs_eq) and not roes
+    # 잉여현금흐름 = 영업현금흐름 - 설비투자
+    #
+    # ★ 2026-09-13 수정 — 설비투자 행이 없으면 0 으로 치고 넘어가
+    #   FCF 가 OCF 와 같아져 버렸다. 그러면 "설비투자를 안 하는 회사"가
+    #   아니라 "설비투자 데이터가 없는 회사"가 FCF 만점을 받는다.
+    #   국내 종목처럼 행 이름이 다른 경우에 실제로 생긴다.
+    #   같은 해 설비투자가 없으면 그 해를 아예 빼는 쪽으로 고쳤다.
+    #
+    # ★ 부호도 방어한다. 야후는 Capital Expenditure 를 음수로 주지만
+    #   대체 행(Purchase Of PPE 등)이 양수로 올 수 있다.
+    #   -abs() 를 쓰면 어느 쪽이 오든 항상 빼진다.
     fcfs = []
-    if ocf_a is not None:
+    if ocf_a is not None and capex is not None:
         for dt in ocf_a.index:
-            c_ = float(capex[dt]) if (capex is not None and dt in capex.index) else 0.0
-            fcfs.append(float(ocf_a[dt])+c_)
+            if dt not in capex.index:
+                continue
+            fcfs.append(float(ocf_a[dt]) - abs(float(capex[dt])))
 
     # 최신 연도 잉여현금흐름(FCF) = 영업현금흐름 - 설비투자
     # 증설기 회사는 이익이 나도 FCF 가 크게 마이너스인 경우가 있어 따로 본다.
@@ -580,25 +615,28 @@ def fetch(t):
             if len(oi):
                 ocf_last = float(oi.iloc[-1])
                 if fcf_last is None:
+                    # ★ 2026-09-13 — 설비투자 행이 통째로 없으면(ci is None)
+                    #   예전에는 c_ = 0.0 이 남아 FCF = OCF 가 됐다.
+                    #   이제는 같은 해 설비투자를 못 찾으면 계산을 포기한다.
                     dt_o = oi.index[-1]
-                    c_ = 0.0
                     if ci is not None and dt_o in ci.index:
-                        c_ = float(ci[dt_o])
-                    elif ci is not None:
-                        c_ = None          # 같은 연도 설비투자가 없으면 포기
-                    if c_ is not None:
-                        fcf_last = ocf_last + c_
+                        fcf_last = ocf_last - abs(float(ci[dt_o]))
     except Exception:
         pass
 
     # R&D 집중도 (매출 대비 %)
+    # R&D 집중도 — 같은 연도의 R&D 와 매출을 쓴다.
+    # (예전엔 각자 .iloc[-1] 이라 최신 R&D 가 NaN 이면 연도가 엇갈렸다)
     rnd = None
     rd_ = _row(inc, ["Research And Development"])
     if rd_ is not None and rev is not None:
         try:
-            rv = float(rev.iloc[-1])
-            if rv > 0:
-                rnd = float(rd_.iloc[-1]) / rv * 100
+            common_r = [x for x in rd_.index if x in rev.index]
+            if common_r:
+                dtr = common_r[-1]
+                rv = float(rev[dtr])
+                if rv > 0:
+                    rnd = float(rd_[dtr]) / rv * 100
         except Exception:
             pass
 
@@ -631,8 +669,9 @@ def fetch(t):
 
                 equity_ = float(eq_[dt_])
                 debt_t = _row(bs, ["Total Debt"])
-                cash_t = _row(bs, ["Cash And Cash Equivalents",
-                                   "Cash Cash Equivalents And Short Term Investments"])
+                # 넓은 라벨(단기투자 포함)을 먼저. 순현금과 같은 순서로 맞춘다.
+                cash_t = _row(bs, ["Cash Cash Equivalents And Short Term Investments",
+                                   "Cash And Cash Equivalents"])
                 d_ = float(debt_t[dt_]) if (debt_t is not None
                                             and dt_ in debt_t.index) else 0.0
                 c_ = float(cash_t[dt_]) if (cash_t is not None
@@ -674,7 +713,11 @@ def fetch(t):
     roic_adj = rnd_asset = rnd_amort = rnd_life = None
     roic_adj_note = None
     try:
-        if _roic_invested is None:
+        # ★ 투입자본이 0 이하면 기존 ROIC 도 계산하지 않는다(현금이 자본+부채보다
+        #   많은 경우). 그런데 조정 쪽은 R&D 자산을 더해 양수로 넘어가면서
+        #   "기존 ROIC 는 없는데 조정 ROIC 만 있는" 값이 나왔다.
+        #   screen --roic-adj-min 이 그걸 그대로 통과시킨다. 같이 막는다.
+        if _roic_invested is None or _roic_invested <= 0:
             roic_adj_note = "ROIC 자체를 못 구함"
         elif rd_ is None:
             # R&D 행이 아예 없는 회사(유틸리티·산업가스 등)는
@@ -753,9 +796,15 @@ def fetch(t):
             # 직접 계산값에 가까운 쪽을 고른다
             dy_field = min(cand, key=lambda x: abs(x - dy_calc))
         else:
-            # 계산값이 없으면(배당금 미제공) 그대로 퍼센트로 본다.
-            # 100 을 곱해 8% 같은 값을 만드는 것보다 안전하다.
-            dy_field = raw
+            # 배당금이나 주가가 없어 직접 계산을 못 하는 경우.
+            #
+            # ★ 2026-09-13 수정 — 예전엔 그대로 퍼센트로 봤는데,
+            #   야후가 비율(0.0069)로 준 종목은 0.0069% 가 되어
+            #   100 배 작게 나왔다. (1번 버그와 정반대 방향)
+            #   크기로 판정한다. 0.25 미만이면 비율로 보는 게 맞다.
+            #   연 25% 배당은 현실에 거의 없고, 아래 15% 상한이
+            #   잘못 곱해진 경우를 한 번 더 걸러 준다.
+            dy_field = raw * 100 if raw < 0.25 else raw
 
     if dy_calc is not None and dy_field is not None:
         # 1.5배 넘게 벌어지면 통화가 섞인 것으로 보고 작은 쪽을 쓴다
@@ -772,12 +821,22 @@ def fetch(t):
     # 리츠·특수 배당주가 아닌 이상 나오기 어려운 수치다.
     if dy is not None and dy > 15:
         dy = None
+    # 연속 배당인상 연수
+    #
+    # ★ 2026-09-13 수정 — 진행 중인 올해를 그대로 넣고 있었다.
+    #   9월이면 분기배당 4번 중 3번만 찍혔으니 올해 합계가 작년보다 작고,
+    #   첫 번째 비교에서 바로 break 되어 항상 None 이 나왔다.
+    #   11년 연속 인상한 회사도 배당 4/10 을 받고,
+    #   1월에 돌리면 10/10 을 받는다. 점수가 스캔 날짜에 따라 달라졌다.
+    #   올해는 빼고 센다.
     div_yrs = None
     try:
         dv = tk.dividends
         if dv is not None and len(dv) > 0:
             yearly = dv.groupby(dv.index.year).sum()
             yrs, vals_ = list(yearly.index), list(yearly.values)
+            if yrs and int(yrs[-1]) >= datetime.now().year:
+                yrs, vals_ = yrs[:-1], vals_[:-1]      # 진행 중인 해 제외
             n = 0
             for i in range(len(vals_) - 1, 0, -1):
                 if vals_[i] > vals_[i - 1]:
@@ -806,15 +865,18 @@ def fetch(t):
     # 분기 주식수 희석
     # 주식수 1년 변화(%). yfinance 는 분기 컬럼 순서가 뒤죽박죽이라
     # 날짜로 정렬한 뒤 "가장 최근" 대 "약 1년 전"을 비교한다.
+    # ★ 2026-09-13 수정 — 분기가 5개 미만이면 예전에는 가장 오래된 분기와
+    #   비교해 놓고 그 값을 "1년 변화" 로 썼다. 4개면 9개월치, 2개면 3개월치를
+    #   1년으로 읽는다. 소형주·국내 종목에서 흔하다.
+    #   이제는 5개 미만이면 분기 계산을 포기하고 연간 추세로 넘긴다.
     dilution = None
     qs = _row(qb, ["Ordinary Shares Number", "Share Issued"])
-    if qs is not None and len(qs) >= 2:
+    if qs is not None:
         try:
             ser = qs.dropna().sort_index()          # 오래된 → 최신
             v = [float(x) for x in ser.values][::-1]  # 최신 → 오래된
-            i = 4 if len(v) > 4 else len(v) - 1
-            if v[i] > 0:
-                dilution = (v[0] / v[i] - 1) * 100
+            if len(v) > 4 and v[4] > 0:             # 정확히 1년 전과 비교
+                dilution = (v[0] / v[4] - 1) * 100
         except Exception:
             pass
     # 분기 데이터가 부실하면 연간 추세로 대체
@@ -828,8 +890,16 @@ def fetch(t):
                        "Net Cash Provided By Used In Operating Activities",
                        "Total Cash From Operating Activities"])
     ni_q = _row(qi, ["Net Income"])
-    ocf_s = float(ocf_q.iloc[-4:].sum()) if ocf_q is not None else None
-    ni_s = float(ni_q.iloc[-4:].sum()) if ni_q is not None else None
+    # ★ 2026-09-13 수정 — 예전엔 각자 .iloc[-4:] 를 합산했다.
+    #   현금흐름이 3분기치뿐이거나 한 분기 늦게 들어오면
+    #   분자와 분모가 서로 다른 기간을 덮어 이익의 질(OCF/NI)이 틀렸다.
+    #   같은 분기끼리만, 4개가 다 있을 때만 계산한다.
+    ocf_s = ni_s = None
+    if ocf_q is not None and ni_q is not None:
+        common_q = sorted(set(ocf_q.index) & set(ni_q.index))[-4:]
+        if len(common_q) == 4:
+            ocf_s = float(sum(float(ocf_q[x]) for x in common_q))
+            ni_s = float(sum(float(ni_q[x]) for x in common_q))
 
     # 이자보상배율 = 영업이익 / 이자비용 (최신 연도 기준)
     # yfinance 는 컬럼이 오래된순/최신순으로 뒤바뀌는 경우가 있어 인덱스로 맞춘다
@@ -846,7 +916,17 @@ def fetch(t):
     # 부채비율 = 총부채 / 자기자본.
     # ★ 반드시 "최신 분기" 기준으로 본다. 연간 데이터는 최대 1년 묵어서
     #   차입 자사주매입·인수 같은 큰 변화를 놓친다.
+    #
+    # ★ 2026-09-13 수정 — 야후의 debtToEquity 를 검증 없이 초기값으로 썼다.
+    #   자기자본이 음수인 회사(자본잠식)는 이 값이 음수로 온다.
+    #   아래 루프는 e_ > 0 일 때만 덮어쓰므로 음수가 그대로 남고,
+    #   채점 기준이 전부 "작을수록 좋다" 여서 세 점수 모두 만점을 받았다.
+    #     성장 부채비율 10/10 + 장기 부채 안전성 10/10 + 다모다란 10/10
+    #   게다가 debt < 30 조건에 걸려 차입 자사주매입 감점까지 풀렸다.
+    #   음수나 숫자가 아니면 아예 버린다. 모르는 게 틀린 것보다 낫다.
     debt_ratio = info.get("debtToEquity")
+    if not (isinstance(debt_ratio, (int, float)) and debt_ratio >= 0):
+        debt_ratio = None
     debt_asof = None
     for df_, tag in ((qb, "분기"), (bs, "연간")):
         try:
@@ -917,25 +997,37 @@ def fetch(t):
     # 순현금 = 현금 - 총부채.
     # 분기 컬럼 순서가 뒤바뀌어 오는 경우가 있어 날짜로 정렬한 뒤
     # 가장 최근 값을 쓴다. (주식수·부채비율에서 같은 문제를 이미 겪었다)
+    # ★ 2026-09-13 수정 두 가지
+    #   (1) 현금은 분기에서, 부채는 연간에서 가져오는 일이 있었다.
+    #       각각 따로 최신값을 찾았기 때문이다. 날짜가 다른 두 숫자를 빼면
+    #       그 사이에 빌린 돈이 통째로 빠진다.
+    #       이제는 같은 표 안에서 둘 다 있는 가장 최근 날짜를 고른다.
+    #   (2) _row 는 먼저 맞는 키를 쓰므로 "Cash And Cash Equivalents" 가
+    #       항상 이겼다. 반도체 회사는 단기투자에 현금을 많이 두는데
+    #       그게 통째로 빠져 순현금이 크게 작게 나왔다.
+    #       넓은 라벨(단기투자 포함)을 먼저 찾도록 순서를 바꿨다.
+    CASH_KEYS = ["Cash Cash Equivalents And Short Term Investments",
+                 "Cash And Cash Equivalents"]
     netcash = None
     try:
-        def _latest(df_, keys):
-            r_ = _row(df_, keys)
-            if r_ is None:
-                return None
-            ser = r_.dropna().sort_index()
-            return float(ser.iloc[-1]) if len(ser) else None
-
-        cash = _latest(qb, ["Cash And Cash Equivalents",
-                            "Cash Cash Equivalents And Short Term Investments"])
-        debt_q = _latest(qb, ["Total Debt"])
-        if cash is None:                      # 분기에 없으면 연간으로
-            cash = _latest(bs, ["Cash And Cash Equivalents",
-                                "Cash Cash Equivalents And Short Term Investments"])
-        if debt_q is None:
-            debt_q = _latest(bs, ["Total Debt"])
-        if cash is not None:
-            netcash = cash - (debt_q or 0)
+        for df_ in (qb, bs):
+            cr = _row(df_, CASH_KEYS)
+            dr = _row(df_, ["Total Debt"])
+            if cr is None:
+                continue
+            if dr is None:
+                # 부채 행이 없으면 부채 0 으로 본다(무차입 회사)
+                ser = cr.dropna().sort_index()
+                if len(ser):
+                    netcash = float(ser.iloc[-1])
+                    break
+                continue
+            common_n = set(cr.dropna().index) & set(dr.dropna().index)
+            if not common_n:
+                continue
+            dtn = max(common_n)
+            netcash = float(cr[dtn]) - float(dr[dtn])
+            break
     except Exception:
         pass
 
@@ -954,7 +1046,10 @@ def fetch(t):
     try:
         h_ = tk.earnings_history
         if h_ is not None and not pd.DataFrame(h_).empty:
-            df = pd.DataFrame(h_)
+            # ★ 2026-09-13 — sort_index() 없이 tail(8) 을 했다.
+            #   야후가 최신순으로 주면 "가장 오래된 8분기" 를 집는다.
+            #   fetch 의 다른 모든 곳은 _row 가 정렬해 주는데 여기만 빠져 있었다.
+            df = pd.DataFrame(h_).sort_index()
             ec = next((c for c in df.columns if "estimate" in str(c).lower()), None)
             ac = next((c for c in df.columns if "actual" in str(c).lower()
                        or "reported" in str(c).lower()), None)
@@ -988,6 +1083,7 @@ def fetch(t):
         "growth": cagr,
         "qmargin": qmargin, "rev1y": rev1y, "px1y": px1y, "dd": dd,
         "revs": revs, "margins": margins, "roes": roes, "fcfs": fcfs,
+        "eq_negative": eq_negative,
         "cagr": cagr, "dil_annual": dil_annual, "dilution": dilution,
         "ocf": ocf_s, "ni": ni_s, "cover": cover, "netcash": netcash,
         "beats": beats,
@@ -1083,14 +1179,32 @@ def footprint_from(h):
     if h is None or len(h) < 60:
         return None
 
+    # 값이 빠진 날은 먼저 버린다. 한 칸만 NaN 이어도 20일 평균이 통째로
+    # NaN 이 되어 점수를 못 내게 되기 때문이다. (2026-09-13)
+    h = h.dropna(subset=["Close", "Volume"])
+    if len(h) < 60:
+        return None
+
     c, v = h["Close"], h["Volume"].astype(float)
     ret = c.pct_change()
     v20 = v.rolling(20).mean()
 
+    # ★ 2026-09-13 — 20일 평균거래량이 0 이거나 NaN 이면
+    #   OBV 변화율의 분모가 무너져 점수 전체가 의미를 잃는다.
+    #   거래정지·무거래 종목이 그렇다. 아예 계산하지 않는다.
+    v20_last = float(v20.iloc[-1]) if len(v20) else float("nan")
+    if not (v20_last > 0):
+        return None
+
     # 1) 대량거래일: 최근 20일 중 거래량 > 20일평균 x2, 양봉/음봉 구분
     last20 = h.tail(20)
     spike = last20[v.tail(20) > (v20.tail(20) * 2)]
-    spike_up = int((spike["Close"] > spike["Open"]).sum())
+    # ★ 2026-09-13 — 시가가 비어 있으면 (종가 > 시가) 가 그냥 False 라
+    #   양봉이 음봉으로 잘못 세어져 수급 점수가 근거 없이 깎였다.
+    #   시가가 없는 날은 전일 종가로 대신한다 (통상 관행).
+    op = h["Open"] if "Open" in h.columns else c.shift(1)
+    op = op.fillna(c.shift(1)).fillna(c)
+    spike_up = int((spike["Close"] > op.reindex(spike.index)).sum())
     spike_dn = int(len(spike)) - spike_up
 
     # 2) 상승일 거래량 / 하락일 거래량 (20일)
@@ -1122,8 +1236,15 @@ def footprint_from(h):
     # 각 지표를 연속값으로 환산해 가중 평균하는 방식으로 바꿨다.
 
     def squash(x, lo, hi):
-        """x 를 lo~hi 구간에서 0~1 로. 범위를 벗어나면 0 또는 1."""
-        if hi == lo:
+        """x 를 lo~hi 구간에서 0~1 로. 범위를 벗어나면 0 또는 1.
+
+        ★ 2026-09-13 — NaN 방어가 없었다.
+          파이썬에서 min(1.0, nan) 은 1.0 이라 NaN 이 그대로 만점이 됐다.
+          거래량이 0 인 날이 하나만 있어도 obv_chg 가 NaN 이 되고,
+          가중치 90 중 75 가 만점으로 채워져 수급 93점 "매수 우위" 가 나왔다.
+          모르면 중립(0.5)으로 둔다.
+        """
+        if x != x or hi == lo:          # x != x 는 NaN 판정
             return 0.5
         return max(0.0, min(1.0, (x - lo) / (hi - lo)))
 
@@ -1193,11 +1314,15 @@ def chart_data(t, period="1y"):
         """N거래일 전 대비 수익률.
         데이터가 조금 모자라면(예: 1년치인데 248일) 가장 오래된 값을 쓴다.
         너무 모자라면(절반 미만) None."""
+        # ★ 2026-09-13 — 허용 폭이 절반(0.5)이라 126봉짜리가
+        #   "1년 수익률" 로 표시됐다. 상장 6~11개월 종목에서 생긴다.
+        #   ret_6m 과 ret_1y 가 똑같은 숫자로 나오면 그 경우다.
+        #   0.9 로 좁혀 거의 1년치가 있을 때만 값을 준다.
         if len(c) < 2:
             return None
         idx = len(c) - 1 - days
         if idx < 0:
-            if len(c) < days * 0.5:
+            if len(c) < days * 0.9:
                 return None
             idx = 0
         a, b = float(c.iloc[idx]), float(c.iloc[-1])
