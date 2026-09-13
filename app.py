@@ -1249,6 +1249,23 @@ def card(d, mode, band=None, rank=None):
         tag, col = vf(p)
         rows.append((nm, p, tag, col))
 
+    # ★ 2026-09-13 — 다모다란을 카드에도 넣는다.
+    #   종목을 나란히 놓고 비교하는 화면인데 이것만 빠져 있었다.
+    #   cli 의 watch 화면과 맞춘 것이기도 하다.
+    #
+    #   순서는 상세 화면의 ①②③ 과 같게 둔다 (성장·장기 → 다모 → 가격).
+    #   두 화면을 오갈 때 읽는 순서가 달라지면 안 된다.
+    #
+    #   ※ 맨 위 요약 카드에는 일부러 넣지 않았다.
+    #     CRDO 처럼 다모다란만 100 인 종목에서, 맥락 없이 큰 숫자로
+    #     제일 먼저 눈에 띄면 오늘 개편한 이유가 무색해진다.
+    #     상세 ②번에는 성장·장기 칩과 경고가 같이 붙어 맥락이 있다.
+    di = score_damo(d)
+    if di:
+        _, _, dp = pctile(di, DAMO_MAX)
+        tag, col = damo_verdict(dp)
+        rows.append(("다모", dp, tag, col))
+
     # 가격 매력 — 성장 레이더의 '주가매력' 축 (성장 점수 안의 일부다)
     ap = axis_pct(ti, TEN_MAX, AXES_TEN, "주가매력") if ti else None
     if ap is not None:
