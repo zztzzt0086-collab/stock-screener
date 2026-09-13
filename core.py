@@ -133,6 +133,18 @@ DAMO_MAX = {"ROIC 초과수익": 35, "재투자 효율": 25, "이익률 추세":
             "부채 안전성": 10, "함정 없음": 10}
 DAMO_WACC = 9.0          # 자본비용 기본 가정 %
 
+# R&D 자본화 상각연수 (년)
+#   ★ 모든 종목에 똑같이 적용해야 한다.
+#     종목마다 다르게 잡으면 조정 강도가 달라져 순위 비교가 오염된다.
+#     처음엔 "가진 연수만큼(최대 5년)" 으로 만들었다가,
+#     어떤 종목은 4년 어떤 종목은 5년이 되어 비교가 깨지는 걸 보고 고정했다.
+#
+#   4로 둔 이유는 야후 연간 손익이 대개 4년치이기 때문이다.
+#   다모다란은 반도체에 5년을 쓰므로, 우리 값은 "조금 덜 조정된" 값이다.
+#   ANET 기준 3년 25.5% / 4년 25.2% / 5년 24.9% 로
+#   연수를 바꿔도 결과가 크게 흔들리지는 않는다(0.6%p).
+RND_LIFE = 4
+
 
 def score_ten(d):
     o = []
@@ -429,6 +441,26 @@ def score_damo(d, wacc=None):
     return o
 
 
+def roic_gap_text(d, wacc=None):
+    """기존 ROIC 와 R&D 자본화 ROIC 를 한 줄로 비교.
+    (라벨, 설명, 판정이 뒤집혔는지) 를 돌려준다. 못 구하면 None."""
+    w = DAMO_WACC if wacc is None else wacc
+    rc, ra = d.get("roic"), d.get("roic_adj")
+    if rc is None or ra is None:
+        return None
+    diff = ra - rc
+    # 자본비용을 넘느냐 마느냐가 뒤집히면 그게 제일 중요한 신호다
+    flip = (rc >= w) != (ra >= w)
+    if flip:
+        msg = ("조정 후 자본비용 미달로 바뀜" if rc >= w
+               else "조정 후 자본비용 상회로 바뀜")
+    elif abs(diff) < 1:
+        msg = "차이 거의 없음"
+    else:
+        msg = f"R&D 자본화하면 {abs(diff):.1f}%p {'낮아짐' if diff < 0 else '높아짐'}"
+    return f"{ra:.1f}%", msg, flip
+
+
 def damo_verdict(p):
     if p >= 75: return "가치 창출형", ORANGE
     if p >= 55: return "양호", AMBER
@@ -583,6 +615,7 @@ def fetch(t):
     #    ROE 는 빚을 많이 쓰면 부풀려지지만 ROIC 는 그렇지 않다.
     #    자본비용(보통 8~10%)보다 높아야 가치를 창출하는 것.
     roic = None
+    _roic_ebit = _roic_tax = _roic_invested = _roic_dt = None
     try:
         if op is not None and eq is not None:
             oi_ = op.dropna().sort_index()
@@ -607,6 +640,68 @@ def fetch(t):
                 invested = equity_ + d_ - c_
                 if invested > 0:
                     roic = nopat / invested * 100
+                # 아래 R&D 자본화 조정에서 다시 쓴다
+                _roic_ebit, _roic_tax = ebit, tax
+                _roic_invested, _roic_dt = invested, dt_
+    except Exception:
+        pass
+
+    # ═══════════════════════════════════════════════════════
+    # ①-2 R&D 자본화 ROIC  (2026-09-13 추가, 점수에는 안 들어감)
+    #
+    #   회계는 R&D 를 그해 비용으로 털어 버린다.
+    #   그러면 연구개발로 쌓아 올린 것이 자산으로 안 잡히므로
+    #     · 투입자본이 실제보다 작게 잡히고
+    #     · 그 결과 ROIC 가 실제보다 높게 나온다
+    #   R&D 비중이 큰 회사일수록 이 왜곡이 크다.
+    #   우리 목록은 반도체·AI 인프라라 R&D 가 매출의 10~20% 다.
+    #
+    #   다모다란은 R&D 를 설비투자처럼 보고 자본화하라고 한다.
+    #   그 방식을 그대로 옮긴 것이다.
+    #
+    #   계산
+    #     상각연수 L = RND_LIFE (모든 종목 동일. 위 상수 주석 참고)
+    #     R&D 자산 = Σ RD(t-i) x (L-i)/L        i = 0 .. L-1
+    #     상각비   = 최근 L년 R&D 평균           (정상상태 근사)
+    #     조정영업이익 = 영업이익 + 올해 R&D - 상각비
+    #     조정투입자본 = 투입자본 + R&D 자산
+    #     조정 ROIC  = 조정영업이익 x (1-세율) / 조정투입자본
+    #
+    #   ★ 점수에 넣지 않는다. SCORE_VERSION 은 1 그대로다.
+    #     기존 ROIC 와 나란히 놓고 6개월간 지켜본 뒤,
+    #     쓸모가 있으면 v2 에 넣는다. (다모다란 점수를 만든 방식과 같다)
+    # ═══════════════════════════════════════════════════════
+    roic_adj = rnd_asset = rnd_amort = rnd_life = None
+    roic_adj_note = None
+    try:
+        if _roic_invested is None:
+            roic_adj_note = "ROIC 자체를 못 구함"
+        elif rd_ is None:
+            # R&D 행이 아예 없는 회사(유틸리티·산업가스 등)는
+            # 자본화할 것이 없으므로 조정해도 값이 같다.
+            roic_adj, roic_adj_note = roic, "R&D 없음 (조정 불필요)"
+        else:
+            rs = rd_.dropna().sort_index()          # 오래된 → 최신
+            # 기준 연도가 ROIC 와 같아야 한다. 그보다 뒤의 해는 자른다.
+            if _roic_dt is not None:
+                rs = rs[[x for x in rs.index if x <= _roic_dt]]
+            vals = [abs(float(x)) for x in rs.values]
+            if len(vals) < RND_LIFE:
+                roic_adj_note = (f"R&D 연수 부족 ({len(vals)}년, "
+                                 f"{RND_LIFE}년 필요)")
+            else:
+                # 연수는 종목마다 다르게 잡지 않는다. 위 RND_LIFE 주석 참고.
+                L = RND_LIFE
+                recent = vals[-L:]                  # 오래된 → 최신
+                # 자산: 최신 해는 100%, 한 해 전은 (L-1)/L, ...
+                asset = sum(v * (L - i) / L
+                            for i, v in enumerate(reversed(recent)))
+                amort = sum(recent) / L
+                adj_ebit = _roic_ebit + recent[-1] - amort
+                adj_inv = _roic_invested + asset
+                if adj_inv > 0:
+                    roic_adj = adj_ebit * (1 - _roic_tax) / adj_inv * 100
+                    rnd_asset, rnd_amort, rnd_life = asset, amort, L
     except Exception:
         pass
 
@@ -898,6 +993,9 @@ def fetch(t):
         "beats": beats,
         "qgrowth": qgrowth, "rnd": rnd, "dy": dy, "div_yrs": div_yrs,
         "roic": roic, "reinv_eff": reinv_eff,
+        # R&D 자본화 조정 ROIC — 점수에는 안 들어간다 (참고·검증용)
+        "roic_adj": roic_adj, "roic_adj_note": roic_adj_note,
+        "rnd_asset": rnd_asset, "rnd_amort": rnd_amort, "rnd_life": rnd_life,
         "fcf_last": fcf_last, "ocf_last": ocf_last,
         "capex_last": capex_last, "capex_chg": capex_chg, "bvps_chg": bvps_chg,
         "tgt": info.get("targetMeanPrice"),

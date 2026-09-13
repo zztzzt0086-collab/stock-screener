@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
-                  score_damo, damo_verdict, USD_KRW, chart_data,
+                  score_damo, damo_verdict, roic_gap_text, USD_KRW, chart_data,
                   money,
                   CHARCOAL, ORANGE, AMBER,
                   score_ten, score_lt, fetch, won, pctile,
@@ -253,6 +253,8 @@ def damo_section(d):
 
         # 1. 가치 창출
         rows = []
+        note1 = ("ROE 는 빚을 많이 쓰면 부풀려지지만 ROIC 는 그렇지 않습니다. "
+                 "자본비용보다 높아야 가치를 만드는 것입니다.")
         if rc is not None:
             gap = rc - wacc
             col = GREEN if gap > 0 else RED
@@ -261,11 +263,39 @@ def damo_section(d):
                      ("초과수익",
                       f'<span style="color:{col};font-weight:700">{gap:+.1f}%p</span>'
                       f' · {"가치 창출" if gap > 0 else "가치 파괴"}', None)]
+
+            # ── R&D 자본화 조정 (점수에는 안 들어감) ──
+            # 회계는 R&D 를 그해 비용으로 턴다. 그러면 연구로 쌓은 것이
+            # 자산에 안 잡혀 투입자본이 작아지고 ROIC 가 높게 나온다.
+            ra = d.get("roic_adj")
+            if ra is not None:
+                g2 = ra - wacc
+                c2 = GREEN if g2 > 0 else RED
+                life = d.get("rnd_life")
+                rows.append(("R&D 자본화 ROIC",
+                             f'{ra:.1f}%'
+                             + (f'  <span style="color:#9CA3AF">({life}년 상각)</span>'
+                                if life else ""), None))
+                rows.append(("조정 후 초과수익",
+                             f'<span style="color:{c2};font-weight:700">{g2:+.1f}%p</span>'
+                             f' · {"가치 창출" if g2 > 0 else "가치 파괴"}', None))
+                if (rc >= wacc) != (ra >= wacc):
+                    rows.append(("⚠ 판정 뒤집힘",
+                                 '<span style="color:#DC2626;font-weight:700">'
+                                 'R&D 비중이 커서 기존 ROIC 가 부풀려져 있었습니다'
+                                 '</span>', None))
+                note1 += ("<br><br>회계는 R&D 를 그해 비용으로 털어냅니다. "
+                          "그러면 연구로 쌓아 올린 것이 자산에 안 잡혀 "
+                          "투입자본이 작아지고 ROIC 가 실제보다 높게 나옵니다. "
+                          "다모다란은 R&D 를 설비투자처럼 자본화하라고 합니다. "
+                          "아래가 그렇게 다시 계산한 값입니다. "
+                          "점수에는 들어가지 않습니다.")
+            elif d.get("roic_adj_note"):
+                rows.append(("R&D 자본화 ROIC",
+                             f"계산 불가 ({d['roic_adj_note']})", GRAY))
         else:
             rows.append(("ROIC", "계산 불가 (데이터 부족)", GRAY))
-        blocks.append(("1. 가치를 만들고 있나", rows,
-                       "ROE 는 빚을 많이 쓰면 부풀려지지만 ROIC 는 그렇지 않습니다. "
-                       "자본비용보다 높아야 가치를 만드는 것입니다."))
+        blocks.append(("1. 가치를 만들고 있나", rows, note1))
 
         # 2. 성장의 대가
         rows = []
@@ -300,9 +330,19 @@ def damo_section(d):
         if len(margins) >= 2:
             rows.append(("영업이익률",
                          " → ".join(f"{x:.0f}%" for x in margins[-4:]), None))
-            tr = margins[-1] - margins[0]
+            # 추세 계산식은 core.py 의 score_damo 와 똑같이 맞춘다.
+            # 예전에는 여기서 margins[-1] - margins[0] 을 썼는데,
+            # 점수 항목은 앞뒤 2년 평균 차이를 써서 같은 화면에
+            # +6%p 와 +8%p 가 동시에 나왔다. (ANET 2026-09-13)
+            # 한 해가 튀는 것에 덜 휘둘리는 쪽(점수 방식)으로 통일했다.
+            if len(margins) >= 3:
+                late = sum(margins[-2:]) / 2
+                early = sum(margins[:2]) / 2 if len(margins) >= 4 else margins[0]
+                tr = late - early
+            else:
+                tr = margins[-1] - margins[0]
             rows.append(("추세", f"{tr:+.0f}%p · "
-                         f'{"개선 중" if tr > 2 else "악화 중" if tr < -2 else "횡보"}',
+                         f'{"개선 중" if tr >= 3 else "악화 중" if tr < -3 else "횡보"}',
                          None))
         if rows:
             blocks.append(("3. 어떻게 크고 있나", rows, None))
