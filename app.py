@@ -111,6 +111,14 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 .refbox {{background:#FAFAFB;border:1px dashed #E0E0E5;border-radius:9px;
          padding:11px 13px;font-size:.75rem;color:#6B7280;line-height:1.55;}}
 
+/* 실적 추이 */
+.rvrow {{display:flex;gap:6px;margin:4px 0 2px;}}
+.rvcell {{flex:1;text-align:center;background:#FAFAFB;border-radius:7px;
+         padding:7px 3px;}}
+.rvy {{font-size:.62rem;color:#9CA3AF;margin-bottom:2px;}}
+.rvg {{font-size:.95rem;font-weight:700;}}
+.ebeat {{font-size:.8rem;color:{CHARCOAL};margin-top:8px;line-height:1.5;}}
+
 /* 가격 위치 — 여러 잣대 비교 */
 .pbox {{background:#fff;border:1px solid #E4E4E7;border-radius:11px;
        padding:13px 15px;margin:0 0 10px;}}
@@ -1085,6 +1093,61 @@ def price_verdict(d):
             f'<div class="reqsub">PER {per:.1f} 를 정당화하려면 필요한 값입니다. '
             f'예측이 아니라 지금 가격에 이미 들어 있는 기대치입니다.</div>'
             f'{cmp_html}</div>', unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════
+    # 실적 — 기대치를 실제로 채우고 있나            2026-09-13 추가
+    #
+    #   위의 '요구 성장률' 은 지금 가격이 뭘 전제하는지 보여 준다.
+    #   그럼 회사가 실제로 그걸 해내고 있는지도 같이 봐야 한다.
+    #   매출 추이와 어닝 서프라이즈가 그 답이다.
+    #
+    #   ★ 전부 이미 발표된 실적이다. 예측이 아니다.
+    # ══════════════════════════════════════════════════════════
+    rv = d.get("revs")
+    bt = d.get("beats")
+    e_, dd_ = dday(d.get("earnings"))
+    ebits = []
+
+    if rv and len(rv) >= 2:
+        yoy = [(rv[i] / rv[i-1] - 1) * 100 if rv[i-1] else None
+               for i in range(1, len(rv))]
+        cells = ""
+        for i, g in enumerate(yoy):
+            if g is None:
+                continue
+            c = ORANGE if g >= 15 else AMBER if g >= 0 else "#DC2626"
+            # ★ yoy 는 오래된 것이 앞이다. 라벨을 뒤에서부터 세야 한다.
+            #   (처음엔 i+1 로 붙여서 가장 오래된 값이 "1년 전" 이 됐다)
+            back = len(yoy) - 1 - i
+            lab = "최근" if back == 0 else f"{back}년 전"
+            bold_ = ";font-weight:800" if back == 0 else ""
+            cells += (f'<div class="rvcell"><div class="rvy">{lab}</div>'
+                      f'<div class="rvg" style="color:{c}{bold_}">'
+                      f'{g:+.0f}%</div></div>')
+        if cells:
+            ebits.append(f'<div class="rvrow">{cells}</div>')
+        # 매출 자체가 줄고 있으면 크게 밝힌다
+        if yoy and yoy[-1] is not None and yoy[-1] < 0:
+            ebits.append('<div class="fwarn">매출이 줄고 있습니다. '
+                         '위의 요구 성장률과 반대 방향입니다.</div>')
+
+    if bt and isinstance(bt, (tuple, list)) and len(bt) == 2 and bt[1]:
+        hit, tot = int(bt[0]), int(bt[1])
+        r_ = hit / tot
+        c = ORANGE if r_ >= 0.75 else AMBER if r_ >= 0.5 else "#DC2626"
+        ebits.append(f'<div class="ebeat">어닝 서프라이즈 '
+                     f'<b style="color:{c}">{hit}/{tot}분기</b> '
+                     f'<span style="color:#9CA3AF">시장 예상을 넘긴 횟수</span></div>')
+
+    if dd_ is not None and -30 < dd_ < 300:
+        when = f"D{-dd_:+d}" if dd_ != 0 else "오늘"
+        ebits.append(f'<div class="ebeat">다음 실적발표 '
+                     f'<b>{e_:%m/%d}</b> <span style="color:#9CA3AF">({when}) — '
+                     f'요구 성장률을 채우는지 확인할 날</span></div>')
+
+    if ebits:
+        st.markdown('<div class="fbox"><div class="reqk">실적 — 기대를 채우고 있나'
+                    '</div>' + "".join(ebits) + '</div>', unsafe_allow_html=True)
 
     # ── 적정가 범위 ──
     wacc = st.session_state.get(f"fvwacc_{d['ticker']}", 9.0)
