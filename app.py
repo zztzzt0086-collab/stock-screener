@@ -111,6 +111,23 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 .refbox {{background:#FAFAFB;border:1px dashed #E0E0E5;border-radius:9px;
          padding:11px 13px;font-size:.75rem;color:#6B7280;line-height:1.55;}}
 
+/* 가격 위치 — 여러 잣대 비교 */
+.pbox {{background:#fff;border:1px solid #E4E4E7;border-radius:11px;
+       padding:13px 15px;margin:0 0 10px;}}
+.pscale {{display:flex;align-items:center;gap:9px;margin-top:9px;
+         flex-wrap:wrap;}}
+.psn {{flex:none;width:88px;font-size:.72rem;color:#6B7280;}}
+.psbar {{flex:1;min-width:110px;position:relative;height:6px;border-radius:3px;
+        background:linear-gradient(90deg,#FDE8D4,#F1F1F2,#DCE6F7);}}
+.psdot {{position:absolute;top:-3px;width:11px;height:11px;margin-left:-5.5px;
+        border-radius:50%;border:2px solid #fff;
+        box-shadow:0 0 0 1px rgba(0,0,0,.15);}}
+.psw {{flex:none;width:104px;font-size:.7rem;font-weight:700;text-align:right;}}
+.psd {{flex:none;width:100%;font-size:.66rem;color:#9CA3AF;
+      padding-left:97px;margin-top:-2px;}}
+.psnote {{font-size:.7rem;color:#9CA3AF;line-height:1.6;margin-top:11px;
+         padding-top:9px;border-top:1px solid #F1F1F2;}}
+
 /* 차트 아래 추세 한 줄 */
 .trendline {{background:#FAFAFB;border:1px solid #EDEDF0;border-radius:7px;
             padding:7px 11px;font-size:.78rem;color:{CHARCOAL};
@@ -574,6 +591,15 @@ def damo_section(d):
                     unsafe_allow_html=True)
 
 
+def fmtp(v, currency="USD"):
+    """가격 한 줄 표기. 원화는 소수점 없이. (price_verdict 의 fmt 와 같은 규칙)"""
+    try:
+        v = float(v)
+    except Exception:
+        return "-"
+    return f"{v:,.0f}원" if currency == "KRW" else f"${v:,.2f}"
+
+
 def price_chart(t, currency="USD", band=None):
     """1년 일봉 캔들 + 20/50MA + 추세선 + 진입밴드."""
     d = chart_data(t)
@@ -647,6 +673,7 @@ def price_chart(t, currency="USD", band=None):
     #   종가에 직선 하나를 맞춰서 밑바탕 방향을 그린다.
     #   이동평균과 달리 최근값에 끌려다니지 않는다.
     trend_pct = None
+    trend_now = trend_sd = None        # 추세선의 현재 지점, 잔차 표준편차
     try:
         ys = [float(r["close"]) for r in rows]
         m_ = n / 2.0 - 0.5                      # 평균 index
@@ -659,6 +686,25 @@ def price_chart(t, currency="USD", band=None):
             y0, y1 = a, a + b * (n - 1)
             if y0 > 0:
                 trend_pct = (y1 / y0 - 1) * 100
+            trend_now = y1
+
+            # ── 추세 채널 (회귀선 ± 1표준편차)  2026-09-13 추가 ──
+            #   추세선 하나만 있으면 "지금이 추세보다 싼가" 를 눈대중해야 한다.
+            #   잔차의 표준편차만큼 위아래로 띠를 그리면, 이 종목이
+            #   평소 추세에서 얼마나 벗어나곤 했는지가 폭으로 보인다.
+            #   ★ 예측이 아니다. 과거에 실제로 벌어졌던 폭일 뿐이다.
+            resid = [ys[i] - (a + b * i) for i in range(n)]
+            trend_sd = (sum(r_ * r_ for r_ in resid) / n) ** 0.5
+            if trend_sd > 0:
+                pts_up, pts_dn = [], []
+                for i in range(0, n, max(1, n // 60)):
+                    fy = a + b * i
+                    pts_up.append(f"{x(i):.1f},{y(fy + trend_sd):.1f}")
+                    pts_dn.append(f"{x(i):.1f},{y(fy - trend_sd):.1f}")
+                poly = " ".join(pts_up) + " " + " ".join(reversed(pts_dn))
+                parts.append(f'<polygon points="{poly}" fill="#9CA3AF" '
+                             f'fill-opacity="0.08"/>')
+
             tcol = UP if b >= 0 else DN
             parts.append(
                 f'<line x1="{x(0):.1f}" y1="{y(y0):.1f}" '
@@ -757,6 +803,101 @@ def price_chart(t, currency="USD", band=None):
     if bits:
         st.markdown(f'<div class="trendline">{" &nbsp;·&nbsp; ".join(bits)}</div>',
                     unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════
+    # 가격 위치 — 여러 잣대로 "지금 어디쯤인가"         2026-09-13 추가
+    #
+    #   ★ 전부 사실 진술이다. 적정가처럼 미래를 가정하지 않는다.
+    #     "이 회사가 지난 1년간 실제로 오갔던 범위에서 지금 어디냐" 만 묻는다.
+    #
+    #   차트에 선을 더 얹지 않고 따로 뺀 이유:
+    #     이미 캔들·20일선·50일선·추세선·고점선·진입밴드가 있다.
+    #     여기에 채널·이평선을 더 그리면 아무것도 안 보인다.
+    #     대신 같은 눈금(0~100%)에 나란히 놓으면 서로 비교가 된다.
+    #
+    #   세 잣대가 같은 쪽을 가리키면 그게 의미 있는 자리다.
+    #   엇갈리면 "아직 애매하다" 는 뜻이고, 그것도 정보다.
+    # ══════════════════════════════════════════════════════════
+    scales = []
+    try:
+        cur_ = float(rows[-1]["close"])
+        lo52 = min(r["low"] for r in rows)
+        hi52 = max(r["high"] for r in rows)
+
+        # ① 1년 범위에서의 위치
+        if hi52 > lo52:
+            p_ = (cur_ - lo52) / (hi52 - lo52) * 100
+            scales.append(("1년 범위", p_,
+                           f"저 {fmtp(lo52, currency)} · 고 {fmtp(hi52, currency)}",
+                           "바닥권" if p_ < 25 else
+                           "아래쪽" if p_ < 45 else
+                           "가운데" if p_ < 65 else
+                           "위쪽" if p_ < 85 else "고점권"))
+
+        # ② 추세선 대비 — 채널 안에서 어디인가
+        if trend_now and trend_sd and trend_sd > 0:
+            z = (cur_ - trend_now) / trend_sd            # 표준편차 몇 배
+            p_ = max(0, min(100, (z + 2) / 4 * 100))     # -2σ~+2σ 를 0~100 으로
+            gap = (cur_ / trend_now - 1) * 100 if trend_now > 0 else 0
+            scales.append(("추세선 대비", p_,
+                           f"{gap:+.0f}%  ({z:+.1f}σ)",
+                           "추세보다 많이 아래" if z < -1 else
+                           "추세 아래" if z < -0.3 else
+                           "추세 근처" if z < 0.3 else
+                           "추세 위" if z < 1 else "추세보다 많이 위"))
+
+        # ③ 50일선 대비
+        ma = [r.get("ma50") for r in rows if r.get("ma50")]
+        if ma:
+            m50 = float(ma[-1])
+            if m50 > 0:
+                gap = (cur_ / m50 - 1) * 100
+                p_ = max(0, min(100, (gap + 25) / 50 * 100))   # -25%~+25%
+                scales.append(("50일선 대비", p_, f"{gap:+.0f}%",
+                               "한참 아래" if gap < -10 else
+                               "아래" if gap < -2 else
+                               "비슷" if gap < 2 else
+                               "위" if gap < 10 else "한참 위"))
+    except Exception:
+        pass
+
+    # ④ 적정가 대비 — 저장된 진입밴드가 있으면
+    try:
+        if valid_band(band):
+            blo, bhi = float(min(band)), float(max(band))
+            if bhi > blo:
+                cur_ = float(rows[-1]["close"])
+                p_ = max(0, min(100, (cur_ - blo) / (bhi - blo) * 100))
+                scales.append(("진입밴드 안 위치", p_,
+                               f"{fmtp(blo, currency)} ~ {fmtp(bhi, currency)}",
+                               "밴드 아래 (더 쌈)" if cur_ < blo else
+                               "밴드 위 (아직 비쌈)" if cur_ > bhi else
+                               "밴드 안"))
+    except Exception:
+        pass
+
+    if scales:
+        rows_html = ""
+        for name, p_, detail, word in scales:
+            p_ = max(0, min(100, p_))
+            col = (ORANGE if p_ < 30 else AMBER if p_ < 50 else
+                   "#6B7280" if p_ < 70 else "#2563EB")
+            rows_html += (
+                f'<div class="pscale">'
+                f'<span class="psn">{name}</span>'
+                f'<span class="psbar"><span class="psdot" '
+                f'style="left:{p_:.0f}%;background:{col}"></span></span>'
+                f'<span class="psw" style="color:{col}">{word}</span>'
+                f'<span class="psd">{detail}</span></div>')
+        st.markdown(
+            '<div class="pbox"><div class="reqk">가격 위치 — 여러 잣대로</div>'
+            + rows_html +
+            '<div class="psnote">전부 지난 1년에 실제로 있었던 값입니다. '
+            '미래를 가정하지 않습니다.<br>'
+            '왼쪽일수록 쌌던 자리, 오른쪽일수록 비쌌던 자리. '
+            '<b>여러 잣대가 같은 쪽을 가리키면 그때가 의미 있는 자리</b>이고, '
+            '엇갈리면 아직 애매하다는 뜻입니다.</div></div>',
+            unsafe_allow_html=True)
 
     st.markdown('<p class="note">빨강 상승 · 파랑 하락 · 주황 20일선 · '
                 '회색 50일선 · <b>점선이 1년 추세선</b> (종가에 직선을 맞춘 것으로, '
