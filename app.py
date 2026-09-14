@@ -37,7 +37,8 @@ from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   CHARCOAL, ORANGE, AMBER,
                   score_ten, score_lt, fetch, won, pctile,
                   ten_verdict, lt_verdict, dday, footprint, fp_verdict,
-                  macro, vix_mood, implied_growth, fair_range)
+                  macro, vix_mood, implied_growth, fair_range,
+                  growth_accel, accel_text)
 
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
@@ -1131,6 +1132,32 @@ def price_verdict(d):
             ebits.append('<div class="fwarn">매출이 줄고 있습니다. '
                          '위의 요구 성장률과 반대 방향입니다.</div>')
 
+    # ── 매출 가속도 ──   ★ 점수에 안 들어감, 2026-09-13 추가
+    #   위 칸이 "얼마나 컸나" 라면 이건 "점점 빨라지나" 다.
+    #   채점표의 '성장 가속도 20점' 은 분기 7개가 필요해 영영 안 켜진다.
+    #   같은 질문을 연 단위로 물어 기록해 두고 2027-03 에 판정한다.
+    ac = growth_accel(rv)
+    if ac:
+        if ac["verdict"] == "매출 감소":
+            acol = "#DC2626"
+        elif ac["n_up"] >= 2 and not ac["low_base"]:
+            acol = ORANGE
+        elif ac["n_up"] >= 1:
+            acol = AMBER
+        else:
+            acol = "#6B7280"
+        cnt = ("" if ac["verdict"] == "매출 감소"
+               else f' <b>{ac["n_up"]}/{ac["n_max"]}</b>')
+        ebits.append(f'<div class="ebeat">매출 가속도 '
+                     f'<b style="color:{acol}">{ac["verdict"]}</b>{cnt} '
+                     f'<span style="color:#9CA3AF">· 성장률이 끝에서부터 '
+                     f'몇 번 연속 빨라졌나 ({ac["pp"]:+.0f}%p)</span></div>')
+        # 매출이 줄고 있는 회사에는 안 띄운다. 기저효과가 아니라 역성장이다.
+        if ac.get("low_base") and ac["n_up"] >= 1 and ac["verdict"] != "매출 감소":
+            ebits.append('<div class="ebeat" style="color:#9CA3AF">'
+                         '※ 역성장한 해가 끼어 있습니다. 가속이 아니라 '
+                         '기저효과일 수 있으니 매출 절대액을 같이 보세요.</div>')
+
     if bt and isinstance(bt, (tuple, list)) and len(bt) == 2 and bt[1]:
         hit, tot = int(bt[0]), int(bt[1])
         r_ = hit / tot
@@ -1251,20 +1278,37 @@ def price_verdict(d):
             #     대신 침착할 때 계산해 둔 가격을 저장해 두고,
             #     시장이 거기 오면 알려 주는 쪽으로 만든다.
             #     앱이 판단해 주는 게 아니라, 내가 한 판단을 지켜 주는 장치다.
+            # ★ 2026-09-14 — 예전에는 이 버튼이 관심종목에도 말없이 넣었다.
+            #   "종목 조회만 했는데 관심종목에 등록된다" 로 보였다.
+            #   이유는 있었다 — 대시보드가 관심종목만 훑어서, 관심종목에
+            #   없으면 밴드에 도달해도 알림이 안 온다. 그래도 말없이 넣는 건
+            #   틀렸다. 이제 체크박스로 내놓고 고르게 한다.
+            tk_ = d["ticker"]
+            in_watch = tk_ in (load_state().get("tickers") or [])
+            also_watch = True
+            if not in_watch:
+                also_watch = st.checkbox(
+                    "관심종목에도 추가", value=True, key=f"bandwatch_{tk_}",
+                    help="대시보드는 관심종목만 훑습니다. "
+                         "끄면 밴드는 저장되지만 도달 알림이 안 옵니다.")
             st.markdown(f'<div class="note">아래 버튼을 누르면 '
                         f'<b>{fmt(buy)} ~ {fmt(mid)}</b> 구간이 진입밴드로 저장됩니다. '
-                        f'차트에 주황 띠로 그려지고, 대시보드에서 이 구간에 '
-                        f'들어오면 알려 줍니다.</div>', unsafe_allow_html=True)
-            if st.button("이 가격대를 진입밴드로 저장", key=f"setband_{d['ticker']}",
+                        f'차트에 주황 띠로 그려집니다.'
+                        + ('' if in_watch else
+                           ('  관심종목에도 추가되어 도달하면 대시보드에서 '
+                            '알려 줍니다.' if also_watch else
+                            '  <b>관심종목에는 안 넣습니다 — 도달 알림은 안 옵니다.</b>'))
+                        + '</div>', unsafe_allow_html=True)
+            if st.button("이 가격대를 진입밴드로 저장", key=f"setband_{tk_}",
                          use_container_width=True):
                 stt = load_state()
-                tk = d["ticker"]
+                tk = tk_
                 stt["bands"] = dict(stt.get("bands") or {})
                 # ★ band_text 가 소수점 2자리로 그리므로 저장도 2자리로 맞춘다.
                 #   4자리로 저장하면 관심종목 탭이 화면값(2자리)과 다르다고 보고
                 #   들어갈 때마다 조용히 덮어써서 저장이 한 번 더 일어난다.
                 stt["bands"][tk] = [round(buy, 2), round(mid, 2)]
-                added = tk not in stt["tickers"]
+                added = also_watch and tk not in stt["tickers"]
                 if added:
                     stt["tickers"] = list(stt["tickers"]) + [tk]
                 save_state(stt)
