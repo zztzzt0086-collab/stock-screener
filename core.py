@@ -41,7 +41,7 @@ CHARCOAL = "#2F3437"
 ORANGE = "#EA580C"
 AMBER = "#B45309"
 BLUE = "#2563EB"
-GRAY = "#9CA3AF"
+GRAY = "#4B5563"
 억 = 1_0000_0000
 조 = 1_0000_0000_0000
 
@@ -482,7 +482,7 @@ def damo_verdict(p):
     if p >= 75: return "가치 창출형", ORANGE
     if p >= 55: return "양호", AMBER
     if p >= 35: return "주의", "#6B7280"
-    return "가치 파괴형", "#9CA3AF"
+    return "가치 파괴형", "#4B5563"
 
 
 # ═════════════════════════════════════════════════════════════
@@ -623,6 +623,142 @@ def fetch(t):
                         fcf_last = ocf_last - abs(float(ci[dt_o]))
     except Exception:
         pass
+
+    # ═══════════════════════════════════════════════════════
+    # 이연수익(계약부채) — 구독형 회사의 '미래 매출 저수지'
+    #                                          (2026-09-14 추가)
+    #
+    #   RPO(잔여 이행의무)는 10-Q 본문에만 있어 야후가 안 준다.
+    #   대신 재무상태표의 이연수익으로 그 일부를 볼 수 있다.
+    #       이연수익 = 돈은 이미 받았는데 아직 매출로 안 잡은 것
+    #       RPO      = 계약은 됐는데 아직 매출로 안 잡은 것 (미청구 포함)
+    #   즉 이연수익 ≤ RPO 다.
+    #   ADSK 로 재면 4,693 / 7,433 — RPO 의 약 63% 를 덮는다.
+    #
+    #   여기서 빌링을 역산한다.   빌링 ≈ 매출 + 이연수익 증가분
+    #   ADSK FY2026 검산: 추정 7,771 vs 회사 발표 약 7,400 (오차 5%)
+    #
+    #   ★ 점수에는 절대 안 들어간다. SCORE_VERSION 1 은 2027-03 까지 고정.
+    #     다모다란·매출 가속도와 같은 '기록 전용' 지표다.
+    # ═══════════════════════════════════════════════════════
+    defrev = None
+    try:
+        _DR_C = ["Current Deferred Revenue"]
+        _DR_N = ["Non Current Deferred Revenue"]
+        # 야후가 회사에 따라 '이연부채' 라벨만 주는 경우가 있다.
+        # 이쪽은 이연법인세 등이 섞일 수 있어 표시할 때 단서를 단다.
+        _DR_C2 = ["Current Deferred Liabilities"]
+        _DR_N2 = ["Non Current Deferred Liabilities"]
+
+        dr_c, dr_n = _row(bs, _DR_C), _row(bs, _DR_N)
+        dr_src = "이연수익"
+        if dr_c is None and dr_n is None:
+            dr_c, dr_n = _row(bs, _DR_C2), _row(bs, _DR_N2)
+            dr_src = "이연부채"
+
+        if rev is not None and (dr_c is not None or dr_n is not None):
+            cur_l, lt_l, rv_l = [], [], []
+            for dt in rev.index:                      # 오래된 것 → 최신
+                c = float(dr_c[dt]) if (dr_c is not None
+                                        and dt in dr_c.index) else 0.0
+                n = float(dr_n[dt]) if (dr_n is not None
+                                        and dt in dr_n.index) else 0.0
+                if c == 0.0 and n == 0.0:
+                    continue                          # 그 해는 자료가 없다
+                cur_l.append(c)
+                lt_l.append(n)
+                rv_l.append(float(rev[dt]))
+
+            # 분기 이연수익 — 연간은 최대 1년 늦다. 최신 신호는 여기서 본다.
+            q_yoy = None
+            try:
+                qc_, qn_ = _row(qb, _DR_C), _row(qb, _DR_N)
+                if qc_ is None and qn_ is None:
+                    qc_, qn_ = _row(qb, _DR_C2), _row(qb, _DR_N2)
+                base = qc_ if qc_ is not None else qn_
+                if base is not None:
+                    tq = []
+                    for dt in base.index:             # 오래된 것 → 최신
+                        c = float(qc_[dt]) if (qc_ is not None
+                                               and dt in qc_.index) else 0.0
+                        n = float(qn_[dt]) if (qn_ is not None
+                                               and dt in qn_.index) else 0.0
+                        tq.append(c + n)
+                    # 이연수익은 계절성이 크다. 반드시 4분기 전과 비교한다.
+                    if len(tq) >= 5 and tq[-5] > 0:
+                        q_yoy = (tq[-1] / tq[-5] - 1) * 100
+            except Exception:
+                q_yoy = None
+
+            if len(rv_l) >= 2:
+                # ★ 2026-09-14 — 야후가 '장기 이연수익' 행을 아예 안 주는
+                #   회사가 많다. 그러면 lt 가 전부 0 이 되어 장기비중이
+                #   0% 로 찍힌다. "정말 0" 과 "자료가 없음" 이 구분이 안 된다.
+                #   156종목 스캔에서 39개 중 13개가 정확히 0.0%,
+                #   2개가 정확히 100.0% 였다. 둘 다 한쪽 행이 없어서 생긴 값이다.
+                #   행이 둘 다 있을 때만 장기비중을 내보낸다.
+                defrev = {"cur": cur_l, "lt": lt_l, "revs": rv_l,
+                          "src": dr_src, "q_yoy": q_yoy, "rev1y": rev1y,
+                          "has_c": dr_c is not None, "has_n": dr_n is not None}
+    except Exception:
+        defrev = None
+
+    # ═══════════════════════════════════════════════════════
+    # 추정치 개정 — '가이던스의 그림자'          (2026-09-14 추가)
+    #
+    #   회사 가이던스 원문은 보도자료 문장이라 야후가 안 준다.
+    #   그런데 회사가 가이던스를 올리면 애널리스트들이 며칠 안에
+    #   숫자를 고친다. 그 흔적이 eps_trend 에 남는다.
+    #
+    #   ANET 실측 (2026-09-14)
+    #       내년 EPS 추정   90일전 4.450  →  현재 5.160   (+16%)
+    #       계단이 60~30일 사이에 났다 = 8/4 가이던스 상향($11.5B→$12.6B)
+    #
+    #   ★ 쓰는 건 '수준' 이 아니라 '변화' 다.
+    #     목표가 $316 같은 수준에는 애널리스트 편향이 들어 있지만,
+    #     같은 사람이 같은 편향으로 매기다가 숫자를 올렸다면
+    #     빼는 순간 편향은 사라지고 새 정보만 남는다.
+    #
+    #   ★ 점수에는 절대 안 들어간다. SCORE_VERSION 1 고정.
+    # ═══════════════════════════════════════════════════════
+    _EST_COLS = ("current", "7daysAgo", "30daysAgo", "60daysAgo", "90daysAgo")
+    est = None
+    try:
+        tr_ = tk.eps_trend
+        if tr_ is not None and not tr_.empty:
+            est = {}
+            for per in tr_.index:
+                row = {}
+                for c in _EST_COLS:
+                    if c in tr_.columns:
+                        v = tr_.loc[per, c]
+                        # NaN 은 자기 자신과 같지 않다 (pandas 없이 판별)
+                        row[c] = None if (v is None or v != v) else float(v)
+                if any(x is not None for x in row.values()):
+                    est[str(per)] = row
+            if not est:
+                est = None
+    except Exception:
+        est = None
+
+    # 매출 추정 — 가이던스 매출의 근사치 (수준·성장률)
+    rev_est = None
+    try:
+        re_ = tk.revenue_estimate
+        if re_ is not None and not re_.empty:
+            rev_est = {}
+            for per in re_.index:
+                row = {}
+                for c in ("avg", "growth", "numberOfAnalysts", "yearAgoRevenue"):
+                    if c in re_.columns:
+                        v = re_.loc[per, c]
+                        row[c] = None if (v is None or v != v) else float(v)
+                if any(x is not None for x in row.values()):
+                    rev_est[str(per)] = row
+            if not rev_est:
+                rev_est = None
+    except Exception:
+        rev_est = None
 
     # R&D 집중도 (매출 대비 %)
     # R&D 집중도 — 같은 연도의 R&D 와 매출을 쓴다.
@@ -1099,6 +1235,10 @@ def fetch(t):
         "rec": info.get("recommendationKey"),
         "short_pct": pct(info.get("shortPercentOfFloat")),
         "earnings": info.get("earningsTimestamp"),
+        # 이연수익 — 채점에 안 쓴다 (subs_flow 로 읽는다)
+        "defrev": defrev,
+        # 추정치 개정 — 채점에 안 쓴다 (est_revision 으로 읽는다)
+        "est": est, "rev_est": rev_est,
     }
 
 
@@ -1137,14 +1277,14 @@ def ten_verdict(p):
     if p >= 70: return "후보군", ORANGE
     if p >= 52: return "관찰", AMBER
     if p >= 35: return "보류", "#6B7280"
-    return "제외", "#9CA3AF"
+    return "제외", "#4B5563"
 
 
 def lt_verdict(p):
     if p >= 75: return "핵심 보유", ORANGE
     if p >= 58: return "보유 적합", AMBER
     if p >= 40: return "조건부", "#6B7280"
-    return "부적합", "#9CA3AF"
+    return "부적합", "#4B5563"
 
 
 def dday(ts):
@@ -1353,7 +1493,7 @@ def fp_verdict(score):
         return "매수 우위", ORANGE
     if score <= 40:
         return "매도 우위", "#2563EB"
-    return "중립", "#9CA3AF"
+    return "중립", "#4B5563"
 
 
 
@@ -1411,13 +1551,13 @@ def macro():
 def vix_mood(v):
     """VIX 를 말로. 채점 아님, 읽기 도우미."""
     if v is None:
-        return "-", "#9CA3AF"
+        return "-", "#4B5563"
     if v >= 30:
         return "공포", "#2563EB"
     if v >= 22:
         return "불안", "#5B7FC7"
     if v >= 17:
-        return "보통", "#9CA3AF"
+        return "보통", "#4B5563"
     if v >= 13:
         return "안정", AMBER
     return "과열 주의", ORANGE
@@ -1720,6 +1860,470 @@ def accel_text(a):
     tail = " ※기저" if a.get("low_base") and a["n_up"] >= 1 and \
         a["verdict"] != "매출 감소" else ""
     return f"{head} · 최근 {a['last']:+.0f}% ({a['pp']:+.0f}%p){tail}"
+
+
+# ═════════════════════════════════════════════════════════════
+# 빌링 — 이연수익으로 역산              (2026-09-14 추가, 채점 안 함)
+#
+#   왜 만들었나 —
+#   ADSK 를 파다가 한 분기 안에서 이런 사다리를 봤다.
+#       매출 +16%  >  빌링 +10%  >  RPO +2%
+#   멀리 볼수록 성장률이 떨어진다. 즉 지금 매출은 과거에 판 것이고
+#   앞으로 들어올 물은 이미 말라 가고 있었다.
+#   우리 점수 15항목은 전부 '이미 인식된 매출' 만 본다.
+#   그래서 이 사다리를 통째로 못 봤다. 그 구멍을 메우는 지표다.
+#
+#   RPO 는 야후가 안 주므로 이연수익으로 대신한다. 완전하지 않다.
+#   못 보는 것: 계약은 했지만 아직 청구 안 한 몫(미청구 백로그).
+# ═════════════════════════════════════════════════════════════
+
+# 이연수익이 매출의 이 % 미만이면 구독형이 아니라고 보고 계산하지 않는다.
+# (장비·반도체는 대부분 여기 걸린다. ANET 처럼 유지보수가 큰 곳은 통과한다.)
+SUBS_MIN_SHARE = 10.0
+# 매출 성장률과 빌링 성장률의 차이가 이 %p 를 넘어야 한쪽으로 판정한다.
+# (연간 판정에만 쓴다. 분기는 아래 비율을 쓴다.)
+SUBS_EPS_PP = 3.0
+# 분기 판정 — 이연수익 성장 ÷ 매출 성장.
+#   1 이면 앞의 매출이 딱 따라오는 것. 1 보다 크면 앞이 더 빨리 찬다.
+SUBS_R_LO, SUBS_R_HI = 0.85, 1.15
+# 매출 성장률 절댓값이 이 % 미만이면 비율을 계산하지 않는다 (0 나눗셈 방어).
+SUBS_MIN_REV_G = 3.0
+
+
+def q_verdict(r):
+    """분기 비율을 말로. r = 이연수익 성장 ÷ 매출 성장"""
+    if r is None:
+        return None
+    if r < 0:
+        return "역행"          # 매출은 느는데 이연수익이 줄거나 그 반대
+    if r >= SUBS_R_HI:
+        return "빠름"
+    if r <= SUBS_R_LO:
+        return "느림"
+    return "나란함"
+
+
+def subs_flow(dr):
+    """이연수익에서 빌링을 역산하고 계약 기간 변화를 본다.
+
+    빌링 ≈ 매출 + 이연수익 증가분
+      · 매출보다 빌링이 느리면 → 앞으로 들어올 매출이 줄고 있다
+      · 장기 이연수익 비중이 줄면 → 고객이 계약을 짧게 끊고 있다
+
+    ★ 점수에 쓰지 않는다. 기록·표시 전용.
+    """
+    if not dr:
+        return None
+    cur = dr.get("cur") or []
+    lt = dr.get("lt") or []
+    rv = dr.get("revs") or []
+    if len(rv) < 2 or len(cur) != len(rv) or len(lt) != len(rv):
+        return None
+
+    tot = [c + l for c, l in zip(cur, lt)]
+    if not all(x > 0 for x in tot) or rv[-1] <= 0:
+        return None
+
+    share = tot[-1] / rv[-1] * 100
+    src = dr.get("src")
+    if share < SUBS_MIN_SHARE:
+        return {"na": True, "share": round(share, 1), "src": src}
+
+    # 빌링 역산. 첫 해는 전년 이연수익이 없어 못 구한다.
+    bill = [rv[i] + (tot[i] - tot[i - 1]) for i in range(1, len(rv))]
+
+    rev_g = (rv[-1] / rv[-2] - 1) * 100 if rv[-2] > 0 else None
+    dr_g = (tot[-1] / tot[-2] - 1) * 100 if tot[-2] > 0 else None
+    bill_g = ((bill[-1] / bill[-2] - 1) * 100
+              if len(bill) >= 2 and bill[-2] > 0 else None)
+
+    gap = None if (rev_g is None or bill_g is None) else rev_g - bill_g
+    if gap is None:
+        verdict = "-"
+    elif gap > SUBS_EPS_PP:
+        verdict = "둔화"            # 빌링이 매출보다 느리다
+    elif gap < -SUBS_EPS_PP:
+        verdict = "선행"            # 빌링이 매출보다 빠르다
+    else:
+        verdict = "나란함"
+
+    # 계약 기간. 장기 이연수익 비중이 높으면 고객이 여러 해를 미리 낸다는 뜻.
+    # 야후가 단기·장기 행을 둘 다 줄 때만 계산한다. (2026-09-14)
+    both = dr.get("has_c", True) and dr.get("has_n", True)
+    lt_r = lt[-1] / tot[-1] * 100 if both else None
+    lt_r0 = lt[0] / tot[0] * 100 if both else None
+    lt_chg = (lt_r - lt_r0) if both else None
+
+    # 분기 신호 — 연간은 최대 1년 늦다. 최신 방향은 이쪽을 본다.
+    # ── 분기 신호 ──
+    #
+    # ★ 2026-09-14 (같은 날 수정) — 처음엔 '매출 성장률 - 이연수익 성장률'
+    #   의 %p 차이로 판정했다. 30종목에 돌려 보니 그 차이가 매출 성장률
+    #   자체와 상관계수 +0.67 이었다. 즉 "앞의 매출이 따라오나" 가 아니라
+    #   "이 회사가 빨리 크나" 를 재고 있었다. 빨리 크는 회사는 무조건
+    #   '느림' 으로 찍혔다 (PLTR 매출 +93% / 이연 +55% → 38%p 차이).
+    #
+    #   비율(이연수익 성장 ÷ 매출 성장)로 바꾸니 상관계수가 -0.25 로
+    #   떨어졌다. 성장 속도와 거의 무관해졌다는 뜻이다. 그래서 비율을 쓴다.
+    q_yoy, rev1y = dr.get("q_yoy"), dr.get("rev1y")
+    q_gap = (rev1y - q_yoy
+             if isinstance(q_yoy, (int, float))
+             and isinstance(rev1y, (int, float)) else None)
+    # 매출 성장률이 0 근처면 나눗셈이 폭발한다. 그 구간은 계산하지 않는다.
+    q_ratio = None
+    if (isinstance(q_yoy, (int, float)) and isinstance(rev1y, (int, float))
+            and abs(rev1y) >= SUBS_MIN_REV_G):
+        q_ratio = q_yoy / rev1y
+
+    return {
+        "na": False, "share": round(share, 1), "src": src,
+        "rev_g": None if rev_g is None else round(rev_g, 1),
+        "bill_g": None if bill_g is None else round(bill_g, 1),
+        "dr_g": None if dr_g is None else round(dr_g, 1),
+        "gap": None if gap is None else round(gap, 1),
+        "verdict": verdict,
+        "lt_ratio": None if lt_r is None else round(lt_r, 1),
+        "lt_chg": None if lt_chg is None else round(lt_chg, 1),
+        "lt_level": lt_level(lt_r),
+        "n_yr": len(rv),
+        "billings": [round(x) for x in bill],
+        "q_yoy": None if q_yoy is None else round(q_yoy, 1),
+        "q_rev": None if rev1y is None else round(rev1y, 1),
+        "q_gap": None if q_gap is None else round(q_gap, 1),
+        "q_ratio": None if q_ratio is None else round(q_ratio, 2),
+        "q_verdict": q_verdict(q_ratio),
+    }
+
+
+# 장기 이연수익 비중 — 고객이 몇 해치를 미리 내는가.
+#
+# ★ 2026-09-14 백테스트에서 오늘 검사한 것 중 제일 센 신호로 나왔다.
+#     6개월 +0.204  ·  1년 +0.283  ·  2년 +0.461   (셋 다 우연선 초과)
+#   다만 관측이 66~164건뿐이고, 연도별로 쪼개면 6개월만 두 해 모두
+#   같은 방향이었다. 1년·2년은 한 해가 만든 숫자다.
+#   ★ 그래서 참고용이다. 점수에는 안 들어간다.
+#
+#   156종목 기준 사분위: 25% = 0%, 중앙 = 25%, 75% = 50%
+SUBS_LT_HI, SUBS_LT_LO = 40.0, 12.0
+
+
+def lt_level(r):
+    if r is None:
+        return None
+    if r >= SUBS_LT_HI:
+        return "장기계약 많음"
+    if r <= SUBS_LT_LO:
+        return "대부분 1년 이내"
+    return "보통"
+
+
+# ═════════════════════════════════════════════════════════════
+# 12개월 모멘텀 — 백테스트에서 연도마다 일관되게 +였던 항목
+#                                        (2026-09-14 추가, 채점 안 함)
+#
+#   266종목 566관측 백테스트
+#       6개월 보유  +0.149  (우연선 0.086)   상위20% +15.6% / 하위20% -3.2%
+#       연도별  2023 +0.37 · 2024 +0.10 · 2025 +0.05 · 2026 +0.23  전부 +
+#
+#   ★ 우리 도구에는 이 항목이 없었다.
+#     오히려 반대인 '하락 회복력(고점 대비)' 에 5점을 준다.
+#     그 고점대비는 +0.057 로 우연선(0.084)을 못 넘었다.
+#     둘은 정반대 방향이므로 나란히 보라고 띄운다.
+#
+#   ★ 주의 — 우연선은 95% 선이라 29개 지표를 3개 기간에 돌리면
+#     아무 관계없는 것도 4개쯤은 넘는다. 이것도 그중 하나일 수 있다.
+#     점수에 안 들어간다. 2027-03 실험 뒤에 다시 판단한다.
+#
+#   값은 fetch 의 px1y (250거래일 전 대비 주가 변화율) 를 그대로 쓴다.
+#   절대 기준보다 '같은 스캔 안에서 몇 위냐' 가 중요하다.
+MOM_HI, MOM_LO = 40.0, 0.0
+
+
+def mom_level(v):
+    if v is None:
+        return None
+    if v >= MOM_HI:
+        return "강함"
+    if v <= MOM_LO:
+        return "약함"
+    return "보통"
+
+
+def mom_text(v, dd=None):
+    """예) '+62%  강함   (고점 대비 -8%)'"""
+    if v is None:
+        return "-"
+    out = f"{v:+.0f}%  {mom_level(v)}"
+    if dd is not None:
+        out += f"   (고점 대비 {dd:+.0f}%)"
+    return out
+
+
+# ═════════════════════════════════════════════════════════════
+# 지난 스캔 대비 변화             (2026-09-14 추가, 채점 안 함)
+#
+#   왜 —
+#   2026-09-14 백테스트에서 이런 패턴이 나왔다.
+#       '수준' 은 거의 다 0        ROIC +0.005 · 영업이익률 -0.051
+#       '변화' 가 살아남았다       매출성장 · 이익률추세 · 모멘텀 · 주식수변화
+#   수준은 이미 주가에 들어가 있고, 변화가 새 소식이기 때문으로 보인다.
+#
+#   야후가 시계열로 주는 변화(매출성장·모멘텀·추정치개정)는 이미 쓰고 있다.
+#   못 주는 것 — '우리 점수와 순위가 지난번보다 어떻게 움직였나' 다.
+#   그건 우리가 스캔할 때마다 history\ 에 남긴 파일로만 알 수 있다.
+#
+#   ★ 스캔을 자주 할수록 이 값이 촘촘해진다. 소급은 안 된다.
+#   ★ 점수에 안 들어간다. 기록·표시 전용.
+# ═════════════════════════════════════════════════════════════
+
+# 비교할 항목 — (키, 한글 이름, 높을수록 좋은가)
+DIFF_KEYS = (("ten", "성장 점수", True),
+             ("lt", "장기 점수", True),
+             ("damo", "다모다란", True),
+             ("est_90", "추정치 개정", True),
+             ("mom12", "12개월 모멘텀", True),
+             ("subs_q_ratio", "빌링 비율", True),
+             ("subs_lt", "장기계약 비중", True),
+             ("per", "PER", False),
+             ("price", "주가", True))
+
+
+def hist_snaps(dirpath="history"):
+    """history\ 의 스냅샷 목록. [(생성일시, 파일명, source)] 최신순."""
+    out = []
+    try:
+        names = [x for x in os.listdir(dirpath) if x.endswith(".json")]
+    except Exception:
+        return out
+    for nm in names:
+        try:
+            with open(os.path.join(dirpath, nm), encoding="utf-8") as f:
+                j = json.load(f)
+        except Exception:
+            continue
+        if j.get("interrupted"):
+            continue                      # 중단된 스캔은 비교 대상에서 뺀다
+        out.append((j.get("generated", ""), nm, j.get("source")))
+    out.sort(reverse=True)
+    return out
+
+
+def hist_prev(source, before, dirpath="history"):
+    """같은 목록(source)으로 돌린 것 중 before 보다 앞선 가장 최근 스냅샷.
+
+    ★ source 가 다르면 비교하지 않는다. 156종목 중 40위와
+      88종목 중 40위는 같은 뜻이 아니기 때문이다.
+    """
+    for gen, nm, src in hist_snaps(dirpath):
+        if src != source or not gen or gen >= (before or ""):
+            continue
+        try:
+            with open(os.path.join(dirpath, nm), encoding="utf-8") as f:
+                return gen, json.load(f).get("data", {})
+        except Exception:
+            continue
+    return None, None
+
+
+def diff_one(cur, prev):
+    """한 종목의 항목별 변화. prev 가 없으면 None."""
+    if not cur or not prev:
+        return None
+    out = {}
+    for k, name, up_good in DIFF_KEYS:
+        a, b = cur.get(k), prev.get(k)
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+            continue
+        d = a - b
+        pct = (a / b - 1) * 100 if b else None
+        out[k] = {"name": name, "now": a, "was": b, "chg": d,
+                  "pct": pct, "up_good": up_good}
+    # 순위는 따로 — 숫자가 작을수록 좋다
+    for k, name, _ in DIFF_KEYS:
+        rk = k + "_rank"
+        a, b = cur.get(rk), prev.get(rk)
+        if isinstance(a, int) and isinstance(b, int):
+            out.setdefault(k, {}).update({"rank": a, "rank_was": b,
+                                          "rank_chg": b - a})
+    return out or None
+
+
+def diff_text(one, k):
+    """한 줄 표기.  예) '성장 점수 71 → 74  (+3)   순위 40 → 12 (▲28)'"""
+    if not one or k not in one:
+        return None
+    v = one[k]
+    if "now" not in v:
+        return None
+    # 비율(빌링 1.83배 같은 것)은 소수점이 있어야 뜻이 산다.
+    # 값이 둘 다 10 미만이면 소수 둘째 자리까지.
+    small = abs(v["now"]) < 10 and abs(v["was"]) < 10
+    f1, f2 = (".2f", "+.2f") if small else (".0f", "+.0f")
+    body = (f"{v['name']} {v['was']:{f1}} → {v['now']:{f1}}"
+            f" ({v['chg']:{f2}})")
+    if "rank" in v:
+        mv = v["rank_chg"]
+        arrow = "▲" if mv > 0 else ("▼" if mv < 0 else "—")
+        body += f"   순위 {v['rank_was']} → {v['rank']} ({arrow}{abs(mv)})"
+    return body
+
+
+def subs_text(s):
+    """한 줄 표기.  예) '둔화 · 매출 +18% / 빌링 +10% · 장기비중 6% ↓'"""
+    if not s:
+        return "-"
+    if s.get("na"):
+        return f"구독 비중 낮음 ({s['share']:.0f}%) — 해당 없음"
+    parts = [s["verdict"]]
+    if s.get("rev_g") is not None and s.get("bill_g") is not None:
+        parts.append(f"매출 {s['rev_g']:+.0f}% / 빌링 {s['bill_g']:+.0f}%")
+    if s.get("lt_ratio") is not None:
+        arrow = ""
+        if s.get("lt_chg") is not None:
+            arrow = (" ↓" if s["lt_chg"] < -2
+                     else " ↑" if s["lt_chg"] > 2 else " →")
+        parts.append(f"장기계약 {s['lt_ratio']:.0f}%{arrow}")
+    tail = " ※이연부채 기준" if s.get("src") == "이연부채" else ""
+    return " · ".join(parts) + tail
+
+
+def subs_q_text(s):
+    """분기 신호 한 줄. 연간보다 최대 1년 빠르다."""
+    if not s or s.get("na") or s.get("q_yoy") is None:
+        return None
+    if s.get("q_rev") is None:
+        return f"분기 이연수익 {s['q_yoy']:+.0f}% (YoY)"
+    head = (f"분기 매출 {s['q_rev']:+.0f}% / 이연수익 {s['q_yoy']:+.0f}%")
+    if s.get("q_ratio") is None:
+        return head + "  (매출 성장률이 0 근처라 비율 계산 안 함)"
+    return f"{head}  =  {s['q_ratio']:.2f}배  {s['q_verdict']}"
+
+
+# ═════════════════════════════════════════════════════════════
+# 추정치 개정 — 가이던스의 그림자      (2026-09-14, 채점 안 함)
+#
+#   회사가 가이던스를 올리면 애널리스트가 며칠 안에 숫자를 고친다.
+#   그 계단을 찾아서 "가이던스가 언제 얼마나 움직였나" 를 읽는다.
+#
+#   못 보는 것 — 회사가 말한 원문, 매출 가이던스의 정확한 숫자,
+#               가이던스 없이 애널이 알아서 올린 경우(구분 못 한다)
+# ═════════════════════════════════════════════════════════════
+
+# 90일 변화가 이 % 를 넘어야 상향/하향으로 본다.
+EST_EPS_PP = 3.0
+# 최근 30일 변화가 이 % 미만이면 '멈춤' 으로 본다.
+EST_FLAT_PP = 0.5
+# 90일 변화가 이 % 를 넘으면 기저가 너무 작다는 뜻이므로 단서를 단다.
+EST_WILD_PP = 100.0
+
+# 구간 이름 (오래된 것 → 최신)
+_EST_SEQ = (("90daysAgo", "60daysAgo", "90~60일"),
+            ("60daysAgo", "30daysAgo", "60~30일"),
+            ("30daysAgo", "7daysAgo", "30~7일"),
+            ("7daysAgo", "current", "최근 7일"))
+
+
+def est_revision(est, rev_est=None, period="+1y"):
+    """애널리스트 EPS 추정치가 90일 동안 어디로 갔나.
+
+    ★ 수준이 아니라 변화를 쓴다. 편향은 빼면 사라진다.
+    ★ 점수에 안 들어간다. 기록·표시 전용.
+    """
+    if not est:
+        return None
+    r = est.get(period) or est.get("0y") or est.get("+1q")
+    if not r:
+        return None
+    cur = r.get("current")
+    if cur is None:
+        return None
+
+    def pct(base):
+        # 적자 구간(음수)이나 0 근처에서는 비율이 무의미하다.
+        if base is None or base <= 0 or cur <= 0:
+            return None
+        return (cur / base - 1) * 100
+
+    c90, c60 = pct(r.get("90daysAgo")), pct(r.get("60daysAgo"))
+    c30, c7 = pct(r.get("30daysAgo")), pct(r.get("7daysAgo"))
+
+    if c90 is None:
+        # 적자라서 못 재는 것과, 이력이 아예 없어서 못 재는 것은 다르다.
+        base = r.get("90daysAgo")
+        note = ("추정치 이력이 없음" if base is None
+                else "적자 구간이라 비율 계산 안 함")
+        return {"na": True, "note": note, "period": period}
+
+    # 어느 구간에서 계단이 났나
+    steps = []
+    for a, b, label in _EST_SEQ:
+        va, vb = r.get(a), r.get(b)
+        if va and vb and va > 0 and vb > 0:
+            steps.append((label, (vb / va - 1) * 100))
+    big = max(steps, key=lambda x: abs(x[1])) if steps else None
+    # 0.x% 짜리 계단은 계단이 아니라 반올림 잡음이다.
+    if big is not None and abs(big[1]) < 1.0:
+        big = None
+
+    if c90 >= EST_EPS_PP:
+        verdict = "상향"
+    elif c90 <= -EST_EPS_PP:
+        verdict = "하향"
+    else:
+        verdict = "제자리"
+
+    # 최근에 멈췄나 — 새 정보가 안 들어오고 있다는 뜻
+    flat = c30 is not None and abs(c30) < EST_FLAT_PP
+    # 계단이 최근 구간에 있으면 갓 나온 소식이다
+    fresh = bool(big and big[0] in ("30~7일", "최근 7일")
+                 and abs(big[1]) >= EST_EPS_PP)
+
+    # 매출 추정 성장률 — 가이던스 매출의 근사치
+    rg = ra = None
+    if rev_est:
+        rr = rev_est.get(period) or rev_est.get("0y") or {}
+        g = rr.get("growth")
+        if isinstance(g, (int, float)):
+            # 야후는 0.16 처럼 소수로 주기도, 16 처럼 %로 주기도 한다.
+            rg = g * 100 if abs(g) <= 3 else g
+        ra = rr.get("numberOfAnalysts")
+
+    return {
+        "na": False, "period": period, "verdict": verdict,
+        "c90": round(c90, 1),
+        "c60": None if c60 is None else round(c60, 1),
+        "c30": None if c30 is None else round(c30, 1),
+        "c7": None if c7 is None else round(c7, 1),
+        "step": None if not big else big[0],
+        "step_pp": None if not big else round(big[1], 1),
+        "flat": flat, "fresh": fresh,
+        "wild": abs(c90) > EST_WILD_PP,
+        "cur": round(cur, 4),
+        "rev_growth": None if rg is None else round(rg, 1),
+        "n_analyst": None if ra is None else int(ra),
+    }
+
+
+def est_text(e):
+    """한 줄 표기.  예) '상향 +16% · 계단 60~30일 · 최근 멈춤'"""
+    if not e:
+        return "-"
+    if e.get("na"):
+        return e.get("note") or "계산 불가"
+    parts = [f"{e['verdict']} {e['c90']:+.0f}%"]
+    if e.get("step"):
+        parts.append(f"계단 {e['step']} ({e['step_pp']:+.0f}%)")
+    if e.get("fresh"):
+        parts.append("갓 나옴")
+    elif e.get("flat"):
+        parts.append("최근 멈춤")
+    tail = " ※기저 작음" if e.get("wild") else ""
+    return " · ".join(parts) + tail
+
+
+def est_period_name(p):
+    return {"0q": "이번 분기", "+1q": "다음 분기",
+            "0y": "올해", "+1y": "내년"}.get(p, p)
 
 
 # ═════════════════════════════════════════════════════════════

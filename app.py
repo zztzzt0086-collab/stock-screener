@@ -38,7 +38,11 @@ from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   score_ten, score_lt, fetch, won, pctile,
                   ten_verdict, lt_verdict, dday, footprint, fp_verdict,
                   macro, vix_mood, implied_growth, fair_range,
-                  growth_accel, accel_text)
+                  growth_accel, accel_text,
+                  subs_flow, subs_text, subs_q_text,
+                  est_revision, est_text, est_period_name,
+                  mom_text, mom_level,
+                  hist_prev, diff_one, DIFF_KEYS)
 
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
@@ -53,7 +57,7 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
        padding:14px 16px;margin-bottom:10px;}}
 .card-hd {{display:flex;justify-content:space-between;align-items:baseline;}}
 .tkr {{font-size:1.05rem;font-weight:700;color:{CHARCOAL};}}
-.nm {{font-size:.72rem;color:#9CA3AF;}}
+.nm {{font-size:.72rem;color:#6B7280;}}
 .px {{font-size:1.05rem;font-weight:700;color:{CHARCOAL};}}
 .up {{color:#DC2626;font-size:.8rem;font-weight:600;}}
 .dn {{color:#2563EB;font-size:.8rem;font-weight:600;}}
@@ -72,7 +76,7 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 .mk {{color:#6B7280;}} .mv {{color:{CHARCOAL};font-weight:600;}}
 .sect {{font-size:.7rem;letter-spacing:.1em;color:{ORANGE};
        font-weight:700;margin:18px 0 7px;}}
-.note {{font-size:.72rem;color:#9CA3AF;line-height:1.5;}}
+.note {{font-size:.72rem;color:#6B7280;line-height:1.5;}}
 .stButton>button {{border-radius:7px;font-weight:600;}}
 
 /* ───────── 2026-09-13 디자인 개편 ─────────
@@ -87,7 +91,7 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
       background:{CHARCOAL};color:#fff;font-size:.68rem;font-weight:700;
       display:flex;align-items:center;justify-content:center;}}
 .qtx {{font-size:1rem;font-weight:700;color:{CHARCOAL};letter-spacing:-.01em;}}
-.qsub {{font-size:.68rem;color:#9CA3AF;font-weight:400;margin-left:auto;}}
+.qsub {{font-size:.68rem;color:#6B7280;font-weight:400;margin-left:auto;}}
 /* 참고용 섹션은 번호를 회색으로 — 비중이 낮다는 걸 색으로 말한다 */
 .qno.ref {{background:#C7CAD1;}}
 
@@ -96,7 +100,7 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
       padding:15px 16px 13px;margin:2px 0 6px;}}
 .sumg {{display:grid;grid-template-columns:1fr 1fr;gap:11px 8px;}}
 .sumc {{text-align:center;padding:9px 4px;border-radius:8px;background:#FAFAFB;}}
-.sumk {{font-size:.66rem;color:#9CA3AF;letter-spacing:.04em;margin-bottom:3px;}}
+.sumk {{font-size:.66rem;color:#6B7280;letter-spacing:.04em;margin-bottom:3px;}}
 .sumv {{font-size:1.5rem;font-weight:800;line-height:1.1;}}
 .suml {{font-size:.7rem;font-weight:700;margin-top:2px;}}
 .sumsay {{margin-top:12px;padding:11px 13px;border-radius:8px;
@@ -105,7 +109,7 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 
 /* 숫자를 키운다 — 핵심 % 는 멀리서도 읽히게 */
 .bigpct {{font-size:1.45rem;font-weight:800;line-height:1;}}
-.bigsub {{font-size:.7rem;color:#9CA3AF;font-weight:500;margin-left:5px;}}
+.bigsub {{font-size:.7rem;color:#6B7280;font-weight:500;margin-left:5px;}}
 
 /* 참고용 블록은 통째로 눌러 놓는다 (수급처럼 예측력 없는 것) */
 .dim {{opacity:.82;}}
@@ -116,7 +120,7 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 .rvrow {{display:flex;gap:6px;margin:4px 0 2px;}}
 .rvcell {{flex:1;text-align:center;background:#FAFAFB;border-radius:7px;
          padding:7px 3px;}}
-.rvy {{font-size:.62rem;color:#9CA3AF;margin-bottom:2px;}}
+.rvy {{font-size:.62rem;color:#6B7280;margin-bottom:2px;}}
 .rvg {{font-size:.95rem;font-weight:700;}}
 .ebeat {{font-size:.8rem;color:{CHARCOAL};margin-top:8px;line-height:1.5;}}
 
@@ -132,9 +136,9 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
         border-radius:50%;border:2px solid #fff;
         box-shadow:0 0 0 1px rgba(0,0,0,.15);}}
 .psw {{flex:none;width:104px;font-size:.7rem;font-weight:700;text-align:right;}}
-.psd {{flex:none;width:100%;font-size:.66rem;color:#9CA3AF;
+.psd {{flex:none;width:100%;font-size:.66rem;color:#6B7280;
       padding-left:97px;margin-top:-2px;}}
-.psnote {{font-size:.7rem;color:#9CA3AF;line-height:1.6;margin-top:11px;
+.psnote {{font-size:.7rem;color:#6B7280;line-height:1.6;margin-top:11px;
          padding-top:9px;border-top:1px solid #F1F1F2;}}
 
 /* 차트 아래 추세 한 줄 */
@@ -144,14 +148,14 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 
 /* 대시보드 카드의 점수 줄 — 성장·장기·가격을 한눈에 */
 .srow {{display:flex;align-items:center;gap:8px;margin-top:6px;}}
-.sname {{flex:none;width:30px;font-size:.7rem;color:#9CA3AF;}}
+.sname {{flex:none;width:30px;font-size:.7rem;color:#6B7280;}}
 .snum {{flex:none;width:26px;font-size:.82rem;font-weight:800;text-align:right;}}
 .sbar {{flex:1;height:5px;background:#F1F1F2;border-radius:3px;overflow:hidden;}}
 .sfil {{height:5px;border-radius:3px;}}
 .stag {{flex:none;width:58px;font-size:.66rem;font-weight:700;text-align:right;}}
 .cfoot {{display:flex;justify-content:space-between;margin-top:9px;
         padding-top:7px;border-top:1px solid #F1F1F2;font-size:.68rem;
-        color:#9CA3AF;}}
+        color:#6B7280;}}
 .rankno {{display:inline-block;min-width:17px;height:17px;line-height:17px;
          border-radius:4px;background:#F1F1F2;color:#6B7280;font-size:.62rem;
          font-weight:700;text-align:center;margin-right:5px;}}
@@ -160,10 +164,10 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 .macro {{display:flex;gap:8px;margin:0 0 8px;}}
 .mcell {{flex:1;background:#fff;border:1px solid #E4E4E7;border-radius:9px;
         padding:7px 10px;display:flex;align-items:baseline;gap:5px;}}
-.mk2 {{font-size:.66rem;color:#9CA3AF;}}
+.mk2 {{font-size:.66rem;color:#6B7280;}}
 .mv2 {{font-size:1rem;font-weight:800;}}
 .ml2 {{font-size:.66rem;font-weight:700;margin-left:auto;}}
-.mnote {{font-size:.66rem;color:#9CA3AF;margin:-4px 0 8px;line-height:1.5;}}
+.mnote {{font-size:.66rem;color:#6B7280;margin:-4px 0 8px;line-height:1.5;}}
 
 /* ③ 가격 판정 — 요구 성장률을 제일 크게 */
 .reqbox {{background:{CHARCOAL};color:#fff;border-radius:11px;
@@ -182,7 +186,7 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
        border-radius:50%;background:{CHARCOAL};border:2px solid #fff;
        box-shadow:0 0 0 1px {CHARCOAL};}}
 .fends {{display:flex;justify-content:space-between;font-size:.66rem;
-        color:#9CA3AF;margin-bottom:8px;}}
+        color:#6B7280;margin-bottom:8px;}}
 .fratio {{font-size:.84rem;line-height:1.5;color:{CHARCOAL};}}
 .fwarn {{margin-top:9px;padding:9px 11px;border-radius:7px;
         background:#FFF4F4;border-left:3px solid #DC2626;
@@ -229,6 +233,32 @@ def gate():
 # 관심종목 + 진입밴드 (watchlist.json 하나에 같이 저장)
 #   구버전(리스트만 있던 파일)도 자동으로 읽어서 변환함
 # ═════════════════════════════════════════════════════════════
+
+def load_snap():
+    """snapshot.json 과 그 직전 스캔을 읽어 둔다 (변화 표시용).
+
+    ★ 2026-09-14 — 백테스트에서 '수준' 은 거의 다 0 이었고
+      '변화' 가 살아남았다. 그런데 점수·순위의 변화는 야후가 못 준다.
+      우리가 스캔할 때마다 history\ 에 남긴 파일로만 알 수 있다.
+    """
+    if "snapdiff" in st.session_state:
+        return st.session_state["snapdiff"]
+    cur = prev = None
+    pg = None
+    try:
+        with open("snapshot.json", encoding="utf-8") as f:
+            j = json.load(f)
+        cur = j.get("data") or {}
+        pg, pd_ = hist_prev(j.get("source"), j.get("generated"))
+        prev = pd_ or {}
+        gen = (j.get("generated") or "")[:10]
+    except Exception:
+        cur, prev, gen = {}, {}, ""
+    out = {"cur": cur, "prev": prev, "gen": gen,
+           "prev_gen": (pg or "")[:10]}
+    st.session_state["snapdiff"] = out
+    return out
+
 
 def load_state():
     if "wstate" in st.session_state:
@@ -363,7 +393,7 @@ def fp_line(fp):
     if not fp:
         return ""
     lab, col = fp_verdict(fp["score"])
-    return (f'<div class="bandline"><span style="color:#9CA3AF">수급 동향</span>'
+    return (f'<div class="bandline"><span style="color:#6B7280">수급 동향</span>'
             f'<span style="color:{col};font-weight:700">{fp["score"]} · {lab}</span></div>')
 
 
@@ -450,7 +480,7 @@ def damo_section(d):
         st.markdown("".join(
             f'<div class="metric"><span class="mk">{k}</span>'
             f'<span class="mv">{txt} '
-            f'<span style="color:#9CA3AF;font-weight:400">'
+            f'<span style="color:#6B7280;font-weight:400">'
             f'{sc}/{DAMO_MAX[k]}</span></span></div>'
             for k, sc, txt in items), unsafe_allow_html=True)
         st.markdown('<p class="note">기존 채점(성장 잠재력·장기 보유)과 '
@@ -492,7 +522,7 @@ def damo_section(d):
                 life = d.get("rnd_life")
                 rows.append(("R&D 자본화 ROIC",
                              f'{ra:.1f}%'
-                             + (f'  <span style="color:#9CA3AF">({life}년 상각)</span>'
+                             + (f'  <span style="color:#6B7280">({life}년 상각)</span>'
                                 if life else ""), None))
                 rows.append(("조정 후 초과수익",
                              f'<span style="color:{c2};font-weight:700">{g2:+.1f}%p</span>'
@@ -655,7 +685,7 @@ def price_chart(t, currency="USD", band=None):
                      f'y2="{yy:.1f}" stroke="#E5E7EB" stroke-width="1"/>')
         fmt = f"{v:,.0f}" if currency == "KRW" else f"{v:,.1f}"
         parts.append(f'<text x="{PAD_L+iw+6:.1f}" y="{yy+3.5:.1f}" font-size="9" '
-                     f'fill="#9CA3AF">{fmt}</text>')
+                     f'fill="#4B5563">{fmt}</text>')
 
     # 캔들
     for i, r in enumerate(rows):
@@ -711,7 +741,7 @@ def price_chart(t, currency="USD", band=None):
                     pts_up.append(f"{x(i):.1f},{y(fy + trend_sd):.1f}")
                     pts_dn.append(f"{x(i):.1f},{y(fy - trend_sd):.1f}")
                 poly = " ".join(pts_up) + " " + " ".join(reversed(pts_dn))
-                parts.append(f'<polygon points="{poly}" fill="#9CA3AF" '
+                parts.append(f'<polygon points="{poly}" fill="#4B5563" '
                              f'fill-opacity="0.08"/>')
 
             tcol = UP if b >= 0 else DN
@@ -753,10 +783,10 @@ def price_chart(t, currency="USD", band=None):
         hi_v = max(r["high"] for r in rows)
         yh = y(hi_v)
         parts.append(f'<line x1="{PAD_L}" y1="{yh:.1f}" x2="{PAD_L+iw:.1f}" '
-                     f'y2="{yh:.1f}" stroke="#9CA3AF" stroke-width="0.9" '
+                     f'y2="{yh:.1f}" stroke="#4B5563" stroke-width="0.9" '
                      f'stroke-dasharray="2 3" opacity="0.7"/>')
         parts.append(f'<text x="{PAD_L+3}" y="{yh-3:.1f}" font-size="8.5" '
-                     f'fill="#9CA3AF">1년 고점</text>')
+                     f'fill="#4B5563">1년 고점</text>')
     except Exception:
         pass
 
@@ -764,7 +794,7 @@ def price_chart(t, currency="USD", band=None):
     for i in (0, n // 2, n - 1):
         anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
         parts.append(f'<text x="{x(i):.1f}" y="{H-4}" font-size="9" '
-                     f'fill="#9CA3AF" text-anchor="{anchor}">'
+                     f'fill="#4B5563" text-anchor="{anchor}">'
                      f'{rows[i]["date"][2:].replace("-", ".")}</text>')
 
     st.markdown('<div class="sect">주가 흐름 (1년)</div>', unsafe_allow_html=True)
@@ -779,13 +809,13 @@ def price_chart(t, currency="USD", band=None):
                        ("1년", "ret_1y")):
         v = d.get(key)
         if v is None:
-            txt, col = "-", "#9CA3AF"
+            txt, col = "-", "#4B5563"
         else:
             txt = f"{v:+.1f}%"
             col = UP if v > 0 else (DN if v < 0 else "#6B7280")
         cells.append(
             f'<div style="flex:1;text-align:center">'
-            f'<div style="font-size:.7rem;color:#9CA3AF">{label}</div>'
+            f'<div style="font-size:.7rem;color:#6B7280">{label}</div>'
             f'<div style="font-size:.85rem;font-weight:700;color:{col}">{txt}</div>'
             f'</div>')
     st.markdown(f'<div style="display:flex;gap:2px;margin-bottom:6px">'
@@ -1089,7 +1119,7 @@ def price_verdict(d):
             f'<div class="reqbox">'
             f'<div class="reqk">지금 가격이 요구하는 것</div>'
             f'<div class="reqv">연 {req:.0f}% 성장 <span '
-            f'style="font-size:.8rem;font-weight:600;color:#9CA3AF">'
+            f'style="font-size:.8rem;font-weight:600;color:#6B7280">'
             f'× 10년</span></div>'
             f'<div class="reqsub">PER {per:.1f} 를 정당화하려면 필요한 값입니다. '
             f'예측이 아니라 지금 가격에 이미 들어 있는 기대치입니다.</div>'
@@ -1150,13 +1180,140 @@ def price_verdict(d):
                else f' <b>{ac["n_up"]}/{ac["n_max"]}</b>')
         ebits.append(f'<div class="ebeat">매출 가속도 '
                      f'<b style="color:{acol}">{ac["verdict"]}</b>{cnt} '
-                     f'<span style="color:#9CA3AF">· 성장률이 끝에서부터 '
+                     f'<span style="color:#6B7280">· 성장률이 끝에서부터 '
                      f'몇 번 연속 빨라졌나 ({ac["pp"]:+.0f}%p)</span></div>')
         # 매출이 줄고 있는 회사에는 안 띄운다. 기저효과가 아니라 역성장이다.
         if ac.get("low_base") and ac["n_up"] >= 1 and ac["verdict"] != "매출 감소":
-            ebits.append('<div class="ebeat" style="color:#9CA3AF">'
+            ebits.append('<div class="ebeat" style="color:#6B7280">'
                          '※ 역성장한 해가 끼어 있습니다. 가속이 아니라 '
                          '기저효과일 수 있으니 매출 절대액을 같이 보세요.</div>')
+
+    # ── 빌링 (이연수익으로 역산) ──  ★ 채점과 무관, 2026-09-14 추가
+    #   점수 15항목은 전부 '이미 인식된 매출' 만 본다.
+    #   이연수익은 '앞으로 들어올 매출' 이다. RPO 대신 쓴다.
+    sb = subs_flow(d.get("defrev"))
+    if sb and not sb.get("na"):
+        scol = ("#DC2626" if sb["verdict"] == "둔화"
+                else ORANGE if sb["verdict"] == "선행" else "#6B7280")
+        rg, bg = sb.get("rev_g"), sb.get("bill_g")
+        num = (f' <span style="color:#6B7280">· 매출 {rg:+.0f}% vs '
+               f'빌링 {bg:+.0f}%</span>') if (rg is not None
+                                             and bg is not None) else ""
+        ebits.append(f'<div class="ebeat">빌링 <span style="color:#6B7280">(이연수익으로 추정)</span> '
+                     f'<b style="color:{scol}">{sb["verdict"]}</b>{num}</div>')
+        qt = subs_q_text(sb)
+        if qt:
+            qv = sb.get("q_verdict")
+            qc = ("#DC2626" if qv in ("느림", "역행")
+                  else ORANGE if qv == "빠름" else "#6B7280")
+            ebits.append(f'<div class="ebeat" style="color:#6B7280">'
+                         f'{qt} <b style="color:{qc}">(분기 — 이쪽이 최신)'
+                         f'</b></div>')
+        lr = sb.get("lt_ratio")
+        if lr is not None:
+            lv = sb.get("lt_level") or ""
+            lcol = ("#16A34A" if lv == "장기계약 많음"
+                    else "#DC2626" if lv == "대부분 1년 이내" else "#6B7280")
+            chg = ("" if sb.get("lt_chg") is None
+                   else f' ({sb["lt_chg"]:+.0f}%p)')
+            ebits.append(
+                f'<div class="ebeat">장기계약 비중 '
+                f'<b style="color:{lcol}">{lr:.0f}% {lv}</b>'
+                f'<span style="color:#6B7280">{chg} — 고객이 몇 해치를 '
+                f'미리 내는가. 높을수록 묶여 있다.</span></div>')
+            ebits.append('<div class="ebeat" style="color:#6B7280">'
+                         '※ 2026-09-14 백테스트에서 제일 센 신호였다 '
+                         '(6개월 +0.20 / 1년 +0.28 / 2년 +0.46). '
+                         '단 관측 66~164건뿐이라 참고용이다.</div>')
+        if sb.get("src") == "이연부채":
+            ebits.append('<div class="ebeat" style="color:#6B7280">'
+                         '※ 야후가 이연수익 행을 안 줘서 이연부채로 '
+                         '계산했습니다. 이연법인세가 섞였을 수 있습니다.</div>')
+        ebits.append('<div class="ebeat" style="color:#6B7280">'
+                     '※ 빌링 = 매출 + 이연수익 증가분 (추정). '
+                     'RPO 의 미청구분은 안 잡히고 점수에도 안 들어갑니다.</div>')
+
+    # ── 추정치 개정 (가이던스의 그림자) ──  ★ 채점과 무관, 2026-09-14
+    ev = est_revision(d.get("est"), d.get("rev_est"))
+    if ev and not ev.get("na"):
+        ecol = ("#16A34A" if ev["verdict"] == "상향"
+                else "#DC2626" if ev["verdict"] == "하향" else "#6B7280")
+        ebits.append(
+            f'<div class="ebeat">추정치 개정 '
+            f'<b style="color:{ecol}">{ev["verdict"]} {ev["c90"]:+.0f}%</b> '
+            f'<span style="color:#6B7280">· {est_period_name(ev["period"])} '
+            f'EPS, 90일 전 대비</span></div>')
+        if ev.get("step"):
+            when = "갓 나옴" if ev.get("fresh") else ""
+            ebits.append(
+                f'<div class="ebeat" style="color:#6B7280">'
+                f'계단이 <b>{ev["step"]}</b> 사이에 났다 '
+                f'({ev["step_pp"]:+.0f}%) '
+                f'<b style="color:{ecol}">{when}</b></div>')
+        if ev.get("rev_growth") is not None:
+            na_ = f' (애널 {ev["n_analyst"]}명)' if ev.get("n_analyst") else ""
+            ebits.append(
+                f'<div class="ebeat">매출 추정 성장률 '
+                f'<b>{ev["rev_growth"]:+.0f}%</b>'
+                f'<span style="color:#6B7280">{na_} — 가이던스 매출의 '
+                f'근사치</span></div>')
+        if ev.get("flat") and not ev.get("fresh"):
+            ebits.append('<div class="ebeat" style="color:#6B7280">'
+                         '※ 최근 30일 변화 없음 — 새 정보가 안 들어오는 중</div>')
+        if ev.get("wild"):
+            ebits.append('<div class="ebeat" style="color:#6B7280">'
+                         '※ 기저 EPS 가 0 근처라 % 가 부풀려졌습니다.</div>')
+        ebits.append('<div class="ebeat" style="color:#6B7280">'
+                     '※ 애널리스트의 수준이 아니라 변화를 봅니다. '
+                     '점수에는 안 들어갑니다.</div>')
+
+    # ── 12개월 모멘텀 ──  ★ 채점과 무관, 2026-09-14 추가
+    mv = d.get("px1y")
+    if mv is not None:
+        mlv = mom_level(mv)
+        mcol = ("#16A34A" if mlv == "강함"
+                else "#DC2626" if mlv == "약함" else "#6B7280")
+        ebits.append(f'<div class="ebeat">12개월 모멘텀 '
+                     f'<b style="color:{mcol}">{mv:+.0f}% {mlv}</b> '
+                     f'<span style="color:#6B7280">· 1년 전 대비 주가</span></div>')
+        ebits.append('<div class="ebeat" style="color:#6B7280">'
+                     '※ 백테스트에서 연도마다 일관되게 + 였던 항목 '
+                     '(6개월 +0.149). 우리 하락 회복력 5점과는 반대 방향이다. '
+                     '점수에는 안 들어간다.</div>')
+
+    # ── 지난 스캔 대비 변화 ──  ★ 채점과 무관, 2026-09-14 추가
+    try:
+        sd = load_snap()
+        one = diff_one(sd["cur"].get(d["ticker"]),
+                       sd["prev"].get(d["ticker"]))
+        if one:
+            ebits.append(f'<div class="ebeat" style="margin-top:8px">'
+                         f'<b>지난 스캔 대비</b> '
+                         f'<span style="color:#6B7280">{sd["prev_gen"]} → '
+                         f'{sd["gen"]}</span></div>')
+            for k, _, _ in DIFF_KEYS:
+                v = one.get(k)
+                if not v or "now" not in v:
+                    continue
+                good = (v["chg"] > 0) == v["up_good"]
+                c = ("#6B7280" if abs(v["chg"]) < 1e-9
+                     else "#16A34A" if good else "#DC2626")
+                rk = ""
+                if "rank" in v:
+                    mv = v["rank_chg"]
+                    ar = "▲" if mv > 0 else ("▼" if mv < 0 else "—")
+                    rk = (f' <span style="color:#6B7280">· 순위 '
+                          f'{v["rank_was"]} → {v["rank"]} {ar}{abs(mv)}</span>')
+                small = abs(v["now"]) < 10 and abs(v["was"]) < 10
+                f1, f2 = (".2f", "+.2f") if small else (".0f", "+.0f")
+                ebits.append(
+                    f'<div class="ebeat" style="color:#6B7280">{v["name"]} '
+                    f'{v["was"]:{f1}} → {v["now"]:{f1}} '
+                    f'<b style="color:{c}">({v["chg"]:{f2}})</b>{rk}</div>')
+            ebits.append('<div class="ebeat" style="color:#6B7280">'
+                         '※ 스캔할 때마다 촘촘해진다. 소급은 안 된다.</div>')
+    except Exception:
+        pass
 
     if bt and isinstance(bt, (tuple, list)) and len(bt) == 2 and bt[1]:
         hit, tot = int(bt[0]), int(bt[1])
@@ -1164,12 +1321,12 @@ def price_verdict(d):
         c = ORANGE if r_ >= 0.75 else AMBER if r_ >= 0.5 else "#DC2626"
         ebits.append(f'<div class="ebeat">어닝 서프라이즈 '
                      f'<b style="color:{c}">{hit}/{tot}분기</b> '
-                     f'<span style="color:#9CA3AF">시장 예상을 넘긴 횟수</span></div>')
+                     f'<span style="color:#6B7280">시장 예상을 넘긴 횟수</span></div>')
 
     if dd_ is not None and -30 < dd_ < 300:
         when = f"D{-dd_:+d}" if dd_ != 0 else "오늘"
         ebits.append(f'<div class="ebeat">다음 실적발표 '
-                     f'<b>{e_:%m/%d}</b> <span style="color:#9CA3AF">({when}) — '
+                     f'<b>{e_:%m/%d}</b> <span style="color:#6B7280">({when}) — '
                      f'요구 성장률을 채우는지 확인할 날</span></div>')
 
     if ebits:
@@ -1249,7 +1406,7 @@ def price_verdict(d):
 
         st.markdown(
             f'<div class="fbox"><div class="reqk">적정가 범위'
-            + (f' <span style="font-weight:400;color:#9CA3AF">({n_est}개)</span>'
+            + (f' <span style="font-weight:400;color:#6B7280">({n_est}개)</span>'
                if n_est < 3 else "") + '</div>'
             f'<div class="fchips">{chips}</div>{bar}'
             f'<div class="fratio">현재 {fmt(px)} — 적정가({midlab} {fmt(mid)})의 '
@@ -1388,7 +1545,7 @@ def summary_card(d):
     if ap is not None:
         # 표시용 눈대중이다. 채점에 쓰이는 기준이 아니다.
         lab, col = (("싼 편", ORANGE) if ap >= 60 else
-                    ("보통", AMBER) if ap >= 40 else ("비싼 편", "#9CA3AF"))
+                    ("보통", AMBER) if ap >= 40 else ("비싼 편", "#4B5563"))
         cells.append(("가격 매력", f"{ap:.0f}", "%", lab, col))
 
     # ④ 수급 — 예측력이 없다고 검증된 값이라 맨 뒤에 둔다
@@ -1562,7 +1719,7 @@ def card(d, mode, band=None, rank=None):
     ap = axis_pct(ti, TEN_MAX, AXES_TEN, "주가매력") if ti else None
     if ap is not None:
         tag, col = (("싼 편", ORANGE) if ap >= 60 else
-                    ("보통", AMBER) if ap >= 40 else ("비싼 편", "#9CA3AF"))
+                    ("보통", AMBER) if ap >= 40 else ("비싼 편", "#4B5563"))
         rows.append(("가격", ap, tag, col))
 
     srows = "".join(
@@ -1639,7 +1796,7 @@ def detail(d, band=None):
         st.markdown(radar_svg(items, mx, mode, p, col), unsafe_allow_html=True)
         rows = "".join(
             f'<div class="metric"><span class="mk">{item_label(k, mode)}</span>'
-            f'<span class="mv">{v} <span style="color:#9CA3AF;font-weight:400">'
+            f'<span class="mv">{v} <span style="color:#6B7280;font-weight:400">'
             f'{s}/{mx[k]}</span></span></div>'
             for k, s, v in items)
         st.markdown(rows, unsafe_allow_html=True)
