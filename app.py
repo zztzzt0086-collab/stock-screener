@@ -37,7 +37,7 @@ from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   market_snapshot, vix_mood,
                   USD_KRW, chart_data,
                   money,
-                  CHARCOAL, ORANGE, AMBER,
+                  CHARCOAL, ORANGE, AMBER, SLATE, MUTED, BLUE, GRAY,
                   score_ten, score_lt, fetch, won, pctile,
                   ten_verdict, lt_verdict, dday, footprint, fp_verdict)
 
