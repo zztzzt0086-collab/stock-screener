@@ -54,7 +54,7 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
        padding:14px 16px;margin-bottom:10px;}}
 .card-hd {{display:flex;justify-content:space-between;align-items:baseline;}}
 .tkr {{font-size:1.05rem;font-weight:700;color:{CHARCOAL};}}
-.nm {{font-size:.72rem;color:#9CA3AF;}}
+.nm {{font-size:.72rem;color:#5A6472;}}
 .px {{font-size:1.05rem;font-weight:700;color:{CHARCOAL};}}
 .up {{color:#DC2626;font-size:.8rem;font-weight:600;}}
 .dn {{color:#2563EB;font-size:.8rem;font-weight:600;}}
@@ -70,10 +70,10 @@ h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
            font-size:.72rem;}}
 .metric {{display:flex;justify-content:space-between;padding:7px 0;
          border-bottom:1px solid #F1F1F2;font-size:.85rem;}}
-.mk {{color:#6B7280;}} .mv {{color:{CHARCOAL};font-weight:600;}}
+.mk {{color:#3F4956;}} .mv {{color:{CHARCOAL};font-weight:600;}}
 .sect {{font-size:.7rem;letter-spacing:.1em;color:{ORANGE};
        font-weight:700;margin:18px 0 7px;}}
-.note {{font-size:.72rem;color:#9CA3AF;line-height:1.5;}}
+.note {{font-size:.72rem;color:#5A6472;line-height:1.5;}}
 .stButton>button {{border-radius:7px;font-weight:600;}}
 </style>""", unsafe_allow_html=True)
 
@@ -172,7 +172,7 @@ def band_status(price, band):
         d = (price / hi - 1) * 100
         if d <= 5:
             return f"밴드까지 -{d:.1f}%", AMBER, False
-        return f"밴드 위 +{d:.1f}%", "#6B7280", False
+        return f"밴드 위 +{d:.1f}%", "#4A5462", False
     d = (1 - price / lo) * 100
     return f"밴드 하회 -{d:.1f}%", AMBER, False
 
@@ -188,8 +188,9 @@ def fp_line(fp):
     if not fp:
         return ""
     lab, col = fp_verdict(fp["score"])
-    return (f'<div class="bandline"><span style="color:#9CA3AF">수급 동향</span>'
-            f'<span style="color:{col};font-weight:700">{fp["score"]} · {lab}</span></div>')
+    return (f'<div class="bandline"><span style="color:#4A5462">수급 동향</span>'
+            f'<span style="color:{CHARCOAL};font-weight:700">{fp["score"]}</span>'
+            f'<span style="color:{col};font-weight:700"> · {lab}</span></div>')
 
 
 
@@ -227,7 +228,7 @@ def market_bar():
         return
     if not ms:
         return
-    GREEN, RED, GRAY = "#16A34A", "#DC2626", "#9CA3AF"
+    GREEN, RED, GRAY = "#16A34A", "#DC2626", "#4A5462"
     cells = []
     for m in ms:
         lab, val = m["label"], m["value"]
@@ -275,19 +276,19 @@ def yearly_svg(ys, idx):
         pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in
                        (pt(i, R * f) for i in range(n)))
         parts.append(f'<polygon points="{pts}" fill="none" '
-                     f'stroke="#E5E7EB" stroke-width="1"/>')
+                     f'stroke="#CBD5E1" stroke-width="1"/>')
     # 축선
     for i in range(n):
         x, y = pt(i, R)
         parts.append(f'<line x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}" '
-                     f'stroke="#E5E7EB" stroke-width="1"/>')
+                     f'stroke="#CBD5E1" stroke-width="1"/>')
 
     # 배경 = 역대 최고
     if all(v is not None for v in best):
         pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in
                        (pt(i, R * best[i] / 100) for i in range(n)))
-        parts.append(f'<polygon points="{pts}" fill="#D1D5DB" '
-                     f'fill-opacity="0.45" stroke="#9CA3AF" stroke-width="1"/>')
+        parts.append(f'<polygon points="{pts}" fill="#94A3B8" '
+                     f'fill-opacity="0.38" stroke="#4A5462" stroke-width="1"/>')
 
     # 앞 = 선택 연도
     if all(v is not None for v in cur):
@@ -310,7 +311,7 @@ def yearly_svg(ys, idx):
             anchor = "start"
         v = ys["raw"][lab][idx]
         parts.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="10" '
-                     f'fill="#6B7280" text-anchor="{anchor}">{lab}</text>')
+                     f'fill="#4A5462" text-anchor="{anchor}">{lab}</text>')
         parts.append(f'<text x="{x:.1f}" y="{y + 12:.1f}" font-size="11" '
                      f'font-weight="700" fill="{CHARCOAL}" '
                      f'text-anchor="{anchor}">'
@@ -339,16 +340,16 @@ def yearly_section(d):
 
     # 표
     head = "".join(f'<th style="text-align:right;padding:4px 6px;'
-                   f'font-size:.72rem;color:#9CA3AF;font-weight:600">{y}</th>'
+                   f'font-size:.72rem;color:#4A5462;font-weight:600">{y}</th>'
                    for y in years) + (
         '<th style="text-align:left;padding:4px 8px;font-size:.64rem;'
-        'color:#9CA3AF;font-weight:600">쓰는 값</th>')
+        'color:#4A5462;font-weight:600">쓰는 값</th>')
     rows = []
     for lab, what, src in YEARLY_AXES:
         cells = "".join(
             f'<td style="text-align:right;padding:4px 6px;font-size:.78rem;'
             f'font-weight:{700 if i == idx else 400};'
-            f'color:{CHARCOAL if i == idx else "#6B7280"}">'
+            f'color:{CHARCOAL if i == idx else "#4A5462"}">'
             f'{"-" if v is None else f"{v:.0f}%"}</td>'
             for i, v in enumerate(ys["raw"][lab]))
         tri = lab in YEARLY_TRI
@@ -356,9 +357,9 @@ def yearly_section(d):
         rows.append(
             f'<tr><td style="padding:4px 6px;font-size:.78rem;'
             f'font-weight:{700 if tri else 400}">{dot}{lab}</td>'
-            f'<td style="padding:4px 6px;font-size:.7rem;color:#9CA3AF">'
+            f'<td style="padding:4px 6px;font-size:.7rem;color:#4A5462">'
             f'{what}</td>{cells}'
-            f'<td style="padding:4px 8px;font-size:.64rem;color:#9CA3AF;'
+            f'<td style="padding:4px 8px;font-size:.64rem;color:#4A5462;'
             f'text-align:left;white-space:nowrap">{src}</td></tr>')
     st.markdown(
         f'<table style="width:100%;border-collapse:collapse;margin-top:2px">'
@@ -382,7 +383,7 @@ def damo_section(d):
         return
 
     cur = d.get("fin_currency") or d.get("currency", "USD")
-    GREEN, RED, GRAY = "#16A34A", "#DC2626", "#6B7280"
+    GREEN, RED, GRAY = "#16A34A", "#DC2626", "#4A5462"
 
     # ── 값만 보여 준다 ──
     # 100점 만점 점수와 "가치 창출형" 같은 판정은 배점 근거가
@@ -544,10 +545,10 @@ def price_chart(t, currency="USD"):
         v = lo + span * f
         yy = y(v)
         parts.append(f'<line x1="{PAD_L}" y1="{yy:.1f}" x2="{PAD_L+iw:.1f}" '
-                     f'y2="{yy:.1f}" stroke="#E5E7EB" stroke-width="1"/>')
+                     f'y2="{yy:.1f}" stroke="#CBD5E1" stroke-width="1"/>')
         fmt = f"{v:,.0f}" if currency == "KRW" else f"{v:,.1f}"
         parts.append(f'<text x="{PAD_L+iw+6:.1f}" y="{yy+3.5:.1f}" font-size="9" '
-                     f'fill="#9CA3AF">{fmt}</text>')
+                     f'fill="#4A5462">{fmt}</text>')
 
     # 캔들
     for i, r in enumerate(rows):
@@ -561,7 +562,7 @@ def price_chart(t, currency="USD"):
                      f'height="{hgt:.1f}" fill="{col}"/>')
 
     # 이동평균선
-    for key, col, wdt in (("ma20", "#EA580C", 1.3), ("ma50", "#6B7280", 1.1)):
+    for key, col, wdt in (("ma20", "#EA580C", 1.3), ("ma50", "#4A5462", 1.1)):
         pts = [f"{x(i):.1f},{y(r[key]):.1f}" for i, r in enumerate(rows)
                if r.get(key)]
         if len(pts) > 2:
@@ -572,7 +573,7 @@ def price_chart(t, currency="USD"):
     for i in (0, n // 2, n - 1):
         anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
         parts.append(f'<text x="{x(i):.1f}" y="{H-4}" font-size="9" '
-                     f'fill="#9CA3AF" text-anchor="{anchor}">'
+                     f'fill="#4A5462" text-anchor="{anchor}">'
                      f'{rows[i]["date"][2:].replace("-", ".")}</text>')
 
     st.markdown('<div class="sect">주가 흐름 (1년)</div>', unsafe_allow_html=True)
@@ -587,13 +588,13 @@ def price_chart(t, currency="USD"):
                        ("1년", "ret_1y")):
         v = d.get(key)
         if v is None:
-            txt, col = "-", "#9CA3AF"
+            txt, col = "-", "#4A5462"
         else:
             txt = f"{v:+.1f}%"
-            col = UP if v > 0 else (DN if v < 0 else "#6B7280")
+            col = UP if v > 0 else (DN if v < 0 else "#4A5462")
         cells.append(
             f'<div style="flex:1;text-align:center">'
-            f'<div style="font-size:.7rem;color:#9CA3AF">{label}</div>'
+            f'<div style="font-size:.7rem;color:#4A5462">{label}</div>'
             f'<div style="font-size:.85rem;font-weight:700;color:{col}">{txt}</div>'
             f'</div>')
     st.markdown(f'<div style="display:flex;gap:2px;margin-bottom:6px">'
@@ -632,7 +633,7 @@ def fp_section(fp):
     st.markdown(f"""<div style="display:flex;justify-content:space-between;
       align-items:center;margin-bottom:8px">
       <span class="badge" style="background:{col}">{lab}</span>
-      <span style="font-size:.9rem;font-weight:700;color:{col}">{fp['score']}/100</span></div>
+      <span style="font-size:.9rem;font-weight:700;color:{CHARCOAL}">{fp['score']}/100</span></div>
       <div class="bar-bg"><div class="bar-fl"
       style="width:{fp['score']}%;background:{col}"></div></div>""",
       unsafe_allow_html=True)
@@ -682,7 +683,7 @@ def radar_svg(items, mx, mode, center_score, center_col, axes=None):
     for i in range(5):
         x, y = pt(i, R)
         grid += (f'<line x1="{CX}" y1="{CY}" x2="{x:.1f}" y2="{y:.1f}" '
-                 f'stroke="#E5E7EB" stroke-width="1"/>')
+                 f'stroke="#CBD5E1" stroke-width="1"/>')
 
     # 데이터 폴리곤
     dpts, dots = [], ""
@@ -703,7 +704,7 @@ def radar_svg(items, mx, mode, center_score, center_col, axes=None):
             ly -= 6
         num = f"{v:.0f}" if v is not None else "-"
         labs += (f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="middle" '
-                 f'font-size="11" fill="#6B7280">{label}</text>'
+                 f'font-size="11" fill="#4A5462">{label}</text>'
                  f'<text x="{lx:.1f}" y="{ly + 15:.1f}" text-anchor="middle" '
                  f'font-size="13" font-weight="700" fill="#2F3437">{num}</text>')
 
@@ -733,7 +734,7 @@ def card(d, mode, band=None, buy=None):
             r = (float(d["price"]) / float(buy) - 1) * 100
             bcol = "#16A34A" if r >= 0 else "#DC2626"
             buyline = (f'<div class="bandline">'
-                       f'<span style="color:#9CA3AF">내 매수가 {float(buy):,.2f}</span>'
+                       f'<span style="color:#4A5462">내 매수가 {float(buy):,.2f}</span>'
                        f'<span style="color:{bcol};font-weight:700">'
                        f'{r:+.1f}%</span></div>')
         except Exception:
@@ -744,7 +745,7 @@ def card(d, mode, band=None, buy=None):
     if bs:
         label, bcol, _ = bs
         bandline = (f'<div class="bandline">'
-                    f'<span style="color:#9CA3AF">진입밴드 {band_text(band)}</span>'
+                    f'<span style="color:#4A5462">진입밴드 {band_text(band)}</span>'
                     f'<span style="color:{bcol};font-weight:700">{label}</span></div>')
 
     st.markdown(f"""<div class="card">
@@ -757,8 +758,8 @@ def card(d, mode, band=None, buy=None):
       <div style="display:flex;justify-content:space-between;
                   align-items:center;margin-top:11px">
         <span class="badge" style="background:{col}">{tag}</span>
-        <span style="font-size:.8rem;color:#6B7280">{got}/{avail}
-              <b style="color:{col}">{p:.0f}%</b></span>
+        <span style="font-size:.8rem;color:#5A6472">{got}/{avail}
+              <b style="color:{CHARCOAL}">{p:.0f}%</b></span>
       </div>
       <div class="bar-bg"><div class="bar-fl"
            style="width:{p:.0f}%;background:{col}"></div></div>
@@ -778,7 +779,7 @@ def detail(d, band=None, buy=None):
                 f'<div style="display:flex;justify-content:space-between;'
                 f'align-items:center;background:#F9FAFB;border-radius:6px;'
                 f'padding:7px 11px;margin:6px 0 2px">'
-                f'<span style="font-size:.74rem;color:#6B7280">'
+                f'<span style="font-size:.74rem;color:#4A5462">'
                 f'내 매수가 {float(buy):,.2f}</span>'
                 f'<span style="font-size:.95rem;font-weight:700;color:{c_}">'
                 f'{r_:+.1f}%</span></div>', unsafe_allow_html=True)
@@ -803,17 +804,17 @@ def detail(d, band=None, buy=None):
         st.markdown(f"""<div style="display:flex;justify-content:space-between;
           align-items:center;margin-bottom:8px">
           <span class="badge" style="background:{col}">{tag}</span>
-          <span style="font-size:.9rem;font-weight:700;color:{col}">{p:.0f}%</span></div>
+          <span style="font-size:.9rem;font-weight:700;color:{CHARCOAL}">{p:.0f}%</span></div>
           <div class="bar-bg"><div class="bar-fl"
           style="width:{p:.0f}%;background:{col}"></div></div>""",
           unsafe_allow_html=True)
         st.markdown(radar_svg(items, mx, mode, p, col), unsafe_allow_html=True)
         rows = "".join(
             f'<div class="metric"><span class="mk"'
-            + (' style="color:#9CA3AF"' if s is None else '') + f'>{k}</span>'
+            + (' style="color:#4A5462"' if s is None else '') + f'>{k}</span>'
             f'<span class="mv"'
-            + (' style="color:#9CA3AF;font-weight:400"' if s is None else '') + f'>{v} '
-            f'<span style="color:#9CA3AF;font-weight:400">'
+            + (' style="color:#4A5462;font-weight:400"' if s is None else '') + f'>{v} '
+            f'<span style="color:#4A5462;font-weight:400">'
             f'{"-" if s is None else s}/{mx[k]}</span></span></div>'
             for k, s, v in items)
         st.markdown(rows, unsafe_allow_html=True)

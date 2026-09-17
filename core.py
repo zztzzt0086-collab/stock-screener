@@ -51,8 +51,12 @@ USD_KRW = 1380
 CHARCOAL = "#2F3437"
 ORANGE = "#EA580C"
 AMBER = "#B45309"
+# 아래 둘은 밝은 화면·어두운 화면 양쪽에서 읽히는 중간 톤이다.
+# 전에 쓰던 #6B7280 · #9CA3AF 는 너무 옅어 글씨가 안 보였다.
+SLATE = "#3F4956"      # 중하위
+MUTED = "#4A5462"      # 하위권
 BLUE = "#2563EB"
-GRAY = "#9CA3AF"
+GRAY = MUTED
 억 = 1_0000_0000
 조 = 1_0000_0000_0000
 
@@ -927,8 +931,8 @@ def damo_verdict(p):
     history 기록과 정렬에만 남아 있다."""
     if p >= 75: return "상위권", ORANGE
     if p >= 55: return "중상위", AMBER
-    if p >= 35: return "중하위", "#6B7280"
-    return "하위권", "#9CA3AF"
+    if p >= 35: return "중하위", SLATE
+    return "하위권", MUTED
 
 
 # ═════════════════════════════════════════════════════════════
@@ -1539,16 +1543,16 @@ def ten_verdict(p):
     """
     if p >= 70: return "상위권", ORANGE
     if p >= 52: return "중상위", AMBER
-    if p >= 35: return "중하위", "#6B7280"
-    return "하위권", "#9CA3AF"
+    if p >= 35: return "중하위", SLATE
+    return "하위권", MUTED
 
 
 def lt_verdict(p):
     """위와 같다. "핵심 보유" "부적합" 은 판단을 대신 내리는 말이라 뺐다."""
     if p >= 75: return "상위권", ORANGE
     if p >= 58: return "중상위", AMBER
-    if p >= 40: return "중하위", "#6B7280"
-    return "하위권", "#9CA3AF"
+    if p >= 40: return "중하위", SLATE
+    return "하위권", MUTED
 
 
 def dday(ts):
@@ -1728,7 +1732,7 @@ def fp_verdict(score):
         return "매수 우위", ORANGE
     if score <= 40:
         return "매도 우위", "#2563EB"
-    return "중립", "#9CA3AF"
+    return "중립", MUTED
 
 
 
