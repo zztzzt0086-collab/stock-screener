@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
-                  score_damo, damo_verdict, yearly_series, RETIRED,
+                  score_damo, damo_verdict, yearly_series, implied_growth, RETIRED,
                   YEARLY_AXES, YEARLY_TRI,
                   market_snapshot, vix_mood,
                   USD_KRW, chart_data,
@@ -850,6 +850,46 @@ def detail(d, band=None, buy=None):
 
     fp_section(footprint(d['ticker']))
 
+    # ── 가격이 무엇을 기대하나 ──
+    #   "비싸다 / 싸다" 는 말하지 않는다. 그건 우리가 정할 수 있는 게 아니다.
+    #   숫자를 나란히 놓고 판단은 사람이 한다.
+    vrows = []
+    if d.get("per"):
+        vrows.append(("PER", f"{d['per']:.1f}"))
+    if d.get("peg") is not None:
+        note = ""
+        if 0 < d["peg"] < 0.2:
+            note = "  (0.2 미만 — 적자→흑자 착시일 수 있음)"
+        elif d["peg"] < 0:
+            note = "  (음수 — 적자·역성장)"
+        vrows.append(("PEG", f"{d['peg']:.2f}{note}"))
+    try:
+        g_, m_, note_ = implied_growth(d)
+    except Exception:
+        g_ = m_ = note_ = None
+    if g_ is not None:
+        vrows.append(("지금 주가가 기대하는 성장률",
+                      f"연 {g_*100:.0f}%  (10년, 목표 이익률 {m_*100:.0f}% 가정)"))
+        if d.get("cagr") is not None:
+            gap = d["cagr"] - g_ * 100
+            word = (f"기대치보다 {abs(gap):.0f}%p 낮다" if gap < 0
+                    else f"기대치보다 {gap:.0f}%p 높다")
+            vrows.append(("실제 장기 CAGR", f"{d['cagr']:.1f}%  ·  {word}"))
+    elif note_:
+        vrows.append(("역산", note_))
+
+    if vrows:
+        st.markdown('<div class="sect">가격이 기대하는 것</div>',
+                    unsafe_allow_html=True)
+        st.markdown("".join(
+            f'<div class="metric"><span class="mk">{k}</span>'
+            f'<span class="mv">{v}</span></div>' for k, v in vrows),
+            unsafe_allow_html=True)
+        st.markdown('<p class="note">비싸다·싸다를 말하지 않습니다. '
+                    '역산은 재투자 40%·세율 21%·자본비용 9%·영구성장 3% 를 '
+                    '가정한 값이며, 이 가정들은 임의로 정한 것입니다.</p>',
+                    unsafe_allow_html=True)
+
     st.markdown('<div class="sect">시장 지표</div>', unsafe_allow_html=True)
     rows = []
     bs = band_status(d["price"], band)
@@ -957,10 +997,34 @@ def main():
                                 unsafe_allow_html=True)
 
             for d in data:
-                card(d, m, bands.get(d["ticker"]), buys.get(d["ticker"]))
-                if st.button(f"{d['ticker']} 상세", key=f"b{d['ticker']}",
-                             use_container_width=True):
-                    st.session_state["sel"] = d["ticker"]
+                t_ = d["ticker"]
+                card(d, m, bands.get(t_), buys.get(t_))
+
+                # ★ 매수가는 여기서 넣는다.
+                #   관심종목 탭에 두었더니 대시보드가 먼저 그려져
+                #   입력이 한 박자 늦게 반영됐다.
+                cb1, cb2 = st.columns([1, 1])
+                braw = cb1.text_input(
+                    "매수가", value=(f"{buys[t_]:g}" if t_ in buys else ""),
+                    key=f"dbuy_{t_}", placeholder="내 매수가",
+                    label_visibility="collapsed")
+                bs_ = braw.strip().replace(",", "")
+                if not bs_ and t_ in buys:
+                    buys.pop(t_, None)
+                    save_state(stt)
+                    st.rerun()
+                elif bs_:
+                    try:
+                        bv = float(bs_)
+                        if bv > 0 and buys.get(t_) != bv:
+                            buys[t_] = bv
+                            save_state(stt)
+                            st.rerun()
+                    except ValueError:
+                        cb1.caption("숫자만")
+
+                if cb2.button("상세", key=f"b{t_}", use_container_width=True):
+                    st.session_state["sel"] = t_
                     st.rerun()
 
             if st.session_state.get("sel"):
@@ -1001,9 +1065,9 @@ def main():
         if not watch:
             st.caption("등록된 종목이 없습니다.")
         else:
-            st.caption("진입밴드는 225-250 처럼, 매수가는 숫자만. "
-                       "매수가를 넣으면 대시보드에 수익률 %만 나옵니다. "
-                       "금액은 표시하지 않습니다.")
+            st.caption("진입밴드는 225-250 처럼 입력 (단일값 158도 가능, "
+                       "비우면 해제). 내 매수가는 대시보드 카드 아래에서 "
+                       "넣습니다.")
         changed = False
         for t in watch:
             c1, c2, c3, c4 = st.columns([2, 3, 2, 1])
@@ -1022,27 +1086,7 @@ def main():
                     bands[t] = nb
                 changed = True
 
-            # 내 매수가. 넣어 두면 대시보드에 수익률(%)이 같이 나온다.
-            # 금액은 일부러 안 보여 준다.
-            braw = c3.text_input("매수가",
-                                 value=(f"{buys[t]:g}" if t in buys else ""),
-                                 key=f"buy_{t}", placeholder="내 매수가",
-                                 label_visibility="collapsed")
-            bs_ = braw.strip().replace(",", "")
-            if not bs_:
-                if t in buys:
-                    buys.pop(t, None)
-                    changed = True
-            else:
-                try:
-                    bv = float(bs_)
-                    if bv <= 0:
-                        raise ValueError
-                    if buys.get(t) != bv:
-                        buys[t] = bv
-                        changed = True
-                except ValueError:
-                    c3.caption("숫자만")
+            # 매수가는 대시보드 카드 아래에서 넣는다.
 
             if c4.button("삭제", key=f"d{t}"):
                 stt["tickers"] = [x for x in watch if x != t]
