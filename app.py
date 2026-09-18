@@ -756,18 +756,26 @@ def card(d, mode, band=None, buy=None):
             pass
 
     # 밸류 판정 한 줄. ★검증 안 된 값이라 그렇게 적는다.★
+    #   ★ 여기서는 과거 주가를 받지 않는다.
+    #     카드마다 야후를 한 번 더 부르면 관심종목 6개에 18회가 되고,
+    #     야후가 막으면 그 뒤로 아무것도 못 받아온다.
+    #     ("데이터를 찾을 수 없습니다" 가 그 증상이었다)
+    #   그래서 대시보드는 역산 하나만 쓰고, 자기 이력 밴드는
+    #   상세 화면에서만 본다.
     valline = ""
     try:
         g0, _, _ = implied_growth(d)
-        vv0 = value_verdict(d, year_end_prices(d["ticker"]), g0)
-        if vv0 and vv0.get("label") and vv0["label"] != "모름":
-            vc0 = {"저평가 쪽": "#16A34A",
-                   "고평가 쪽": "#DC2626"}.get(vv0["label"], MUTED)
-            valline = (f'<div class="bandline">'
-                       f'<span style="color:{MUTED}">밸류 '
-                       f'<span style="font-size:.64rem">(검증 안 됨)</span></span>'
-                       f'<span style="color:{vc0};font-weight:700">'
-                       f'{vv0["label"]}</span></div>')
+        if g0 is not None and d.get("cagr") is not None:
+            gap0 = g0 * 100 - d["cagr"]
+            if abs(gap0) >= 5:          # 5%p 미만은 굳이 말하지 않는다
+                lab0 = "기대 > 실적" if gap0 > 0 else "기대 < 실적"
+                vc0 = "#DC2626" if gap0 > 0 else "#16A34A"
+                valline = (f'<div class="bandline">'
+                           f'<span style="color:{MUTED}">역산 '
+                           f'<span style="font-size:.64rem">(검증 안 됨)</span>'
+                           f'</span>'
+                           f'<span style="color:{vc0};font-weight:700">'
+                           f'{lab0} {abs(gap0):.0f}%p</span></div>')
     except Exception:
         pass
 
