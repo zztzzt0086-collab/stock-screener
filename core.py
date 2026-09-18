@@ -926,6 +926,217 @@ def vix_mood(v):
     return "공포"
 
 
+
+# ═════════════════════════════════════════════════════════════
+# 밸류 판정 — 자기 이력 대비
+#
+#   PER 절대수준으로 싸다/비싸다를 가리면 주기 종목에서 거꾸로 간다.
+#   MU 가 그 예다: TTM 이익률 80%, PER 21 이라 싸 보이지만
+#   4년 평균 이익률로 정상화하면 PER 이 세 자리가 된다.
+#   이익이 꼭지일 때 PER 이 제일 낮게 나오기 때문이다.
+#
+#   그래서 두 가지를 본다.
+#     ① 정상화 이익   현재 매출 × 과거 평균 영업이익률
+#     ② 자기 이력 밴드 그 회사가 늘 받던 값 대비 지금 어디인가
+#
+#   ★ 한계 — 화면에도 적는다
+#     야후는 연간 재무를 4년치만 준다. 밴드 표본이 4점뿐이다.
+#     "하위 30%" 가 사실상 "4개 중 1개" 다. 방향만 참고할 것.
+#     EDGAR 를 붙이면 17년으로 늘릴 수 있다.
+# ═════════════════════════════════════════════════════════════
+
+@cache(3600)
+def year_end_prices(t, years=6):
+    """연말 종가. 밸류 밴드에서 그 해 시가총액을 내는 데 쓴다.
+
+    돌려주는 값: {"2022": 123.4, ...}  실패하면 빈 dict.
+    거래일이 아닌 12월 31일도 asof 로 가장 가까운 앞 날을 쓴다.
+    """
+    try:
+        h = yf.Ticker(t).history(period=f"{years}y", auto_adjust=True)
+    except Exception:
+        return {}
+    if h is None or len(h) < 30:
+        return {}
+    try:
+        c = h["Close"].copy()
+        c.index = c.index.tz_localize(None)
+    except Exception:
+        c = h["Close"]
+    out = {}
+    for y in sorted({d_.year for d_ in c.index}):
+        try:
+            v = c[c.index.year == y]
+            if len(v):
+                out[str(y)] = float(v.iloc[-1])      # 그 해 마지막 거래일
+        except Exception:
+            continue
+    return out
+
+
+def value_band(d, px_hist=None):
+    """자기 이력 대비 지금 밸류가 어디쯤인가.
+
+    px_hist : {"2022": 연말종가, ...} 형태. 없으면 밴드는 못 낸다.
+
+    돌려주는 값 (없으면 None)
+      norm_margin   정상화 영업이익률 (과거 평균)
+      norm_per      정상화 PER
+      cur_per       지금 PER (TTM)
+      band_pct      자기 이력에서 지금이 몇 백분위인가 (0~100)
+      band_n        밴드를 만든 표본 수  ★ 이게 작으면 믿지 말 것
+      basis         "PER" 또는 "EV/매출"
+      note          한계나 주의
+    """
+    out = {"norm_margin": None, "norm_per": None, "cur_per": None,
+           "band_pct": None, "band_n": 0, "basis": None, "note": None}
+
+    revs = d.get("revs") or []
+    margins = d.get("margins") or []
+    mcap = d.get("mcap_fin") or d.get("mcap_raw")
+    if not revs or not margins or not mcap:
+        out["note"] = "매출·이익률·시가총액 중 없는 것이 있다"
+        return out
+
+    # ① 정상화 이익 — 현재 매출 × 과거 평균 이익률
+    nm = sum(margins) / len(margins)
+    out["norm_margin"] = nm
+    rev0 = float(revs[-1])
+    if rev0 <= 0:
+        out["note"] = "매출이 0 이하"
+        return out
+
+    # 적자 연도가 섞이면 PER 밴드가 깨진다 → EV/매출로 간다
+    has_loss = any(m <= 0 for m in margins)
+    out["basis"] = "EV/매출" if has_loss else "PER"
+
+    if not has_loss and nm > 0:
+        norm_ni = rev0 * (nm / 100) * (1 - 0.21)   # 세후. 세율은 가정이다
+        if norm_ni > 0:
+            out["norm_per"] = mcap / norm_ni
+    if d.get("per"):
+        out["cur_per"] = float(d["per"])
+
+    # ② 자기 이력 밴드
+    #    연도별 시가총액을 알아야 한다. 주가 이력이 있어야 계산된다.
+    if not px_hist:
+        out["note"] = "과거 주가가 없어 밴드를 내지 못했다"
+        return out
+
+    yrs = d.get("y_years") or []
+    sh = d.get("shares_hist") or []       # 연도별 주식수 (없으면 최신으로 대체)
+    vals = []
+    for i, y in enumerate(yrs):
+        px = px_hist.get(str(y))
+        if px is None or i >= len(revs):
+            continue
+        n_sh = sh[i] if i < len(sh) and sh[i] else d.get("shares")
+        if not n_sh:
+            continue
+        mc = px * n_sh
+        if has_loss:
+            if revs[i] > 0:
+                vals.append(mc / revs[i])          # EV/매출 (순현금 무시)
+        else:
+            ni_ = revs[i] * (nm / 100) * (1 - 0.21)   # 정상화 이익으로 통일
+            if ni_ > 0:
+                vals.append(mc / ni_)
+    out["band_n"] = len(vals)
+    if len(vals) < 3:
+        out["note"] = f"밴드 표본이 {len(vals)}개뿐이라 백분위를 내지 않는다"
+        return out
+
+    cur = (mcap / rev0) if has_loss else out["norm_per"]
+    if cur is None:
+        out["note"] = "지금 값을 낼 수 없다"
+        return out
+    below = sum(1 for v in vals if v < cur)
+    out["band_pct"] = below / len(vals) * 100
+    out["note"] = (f"표본 {len(vals)}개 (야후 연간 한도). "
+                   "표본이 적어 방향만 참고할 것")
+    return out
+
+
+def value_verdict(d, px_hist=None, g_implied=None):
+    """저평가 / 적정 / 고평가 / 모름.
+
+    ★ 화면에 내지 않는다. snapshot 에 기록만 하고
+      6개월 뒤 verify 로 쓸모를 확인한 다음에 낸다.
+      "62%" 는 사람이 해석하지만 "고평가" 는 결론으로 읽힌다.
+
+    경계는 하나로 정하지 않고 후보 여럿을 같이 돌려준다.
+    6개월 뒤 어느 경계가 맞았는지 보고 고르기 위함이다.
+    """
+    vb = value_band(d, px_hist)
+    cagr = d.get("cagr")
+
+    reasons = []
+    cheap = rich = 0
+
+    # ① 역산 — 시장이 기대하는 성장률 대 과거 실적
+    #   ★ 역산에 최근 이익률을 쓰면 주기 함정이 그대로 남는다.
+    #     MU 는 최근 2년 평균이 51%(꼭지)라 기대 성장률이 낮게 나온다.
+    #     그래서 정상화 이익률로 다시 역산한다.
+    nm_ = vb.get("norm_margin")
+    if nm_ is not None and nm_ > 0:
+        try:
+            g2, _, _ = implied_growth(d, margin=nm_ / 100)
+            if g2 is not None:
+                g_implied = g2
+                reasons.append(f"역산에 정상화 이익률 {nm_:.0f}% 를 썼다")
+        except Exception:
+            pass
+
+    gap = None
+    if g_implied is not None and cagr is not None:
+        gap = g_implied * 100 - cagr      # 양수면 기대가 과거보다 높다
+        if gap < 0:
+            cheap += 1
+            reasons.append(f"기대 성장률이 과거 CAGR 보다 {abs(gap):.0f}%p 낮다")
+        else:
+            rich += 1
+            reasons.append(f"기대 성장률이 과거 CAGR 보다 {gap:.0f}%p 높다")
+
+    # ② 자기 이력 밴드
+    bp = vb.get("band_pct")
+    if bp is not None:
+        if bp <= 30:
+            cheap += 1
+            reasons.append(f"자기 이력 {bp:.0f} 백분위 — 싼 쪽 ({vb['basis']})")
+        elif bp >= 70:
+            rich += 1
+            reasons.append(f"자기 이력 {bp:.0f} 백분위 — 비싼 쪽 ({vb['basis']})")
+        else:
+            reasons.append(f"자기 이력 {bp:.0f} 백분위 — 중간 ({vb['basis']})")
+
+    if cheap and rich:
+        label = "모름"
+        reasons.append("두 신호가 서로 반대다")
+    elif cheap >= 1 and rich == 0:
+        label = "저평가 쪽"
+    elif rich >= 1 and cheap == 0:
+        label = "고평가 쪽"
+    else:
+        label = "모름"
+        reasons.append("판단할 재료가 없다")
+
+    # 경계 후보를 여러 개 같이 남긴다 (나중에 어느 것이 맞았는지 보려고)
+    cand = {}
+    if bp is not None:
+        for th in (20, 30, 40):
+            cand[f"band_lo{th}"] = bp <= th
+            cand[f"band_hi{th}"] = bp >= 100 - th
+    if gap is not None:
+        for th in (0, 5, 10):
+            cand[f"gap_over{th}"] = gap > th
+
+    return {"label": label, "reasons": reasons,
+            "band_pct": bp, "band_n": vb.get("band_n"),
+            "basis": vb.get("basis"), "norm_margin": vb.get("norm_margin"),
+            "norm_per": vb.get("norm_per"), "cur_per": vb.get("cur_per"),
+            "implied_gap": gap, "note": vb.get("note"), "cand": cand}
+
+
 def damo_verdict(p):
     """화면에서는 안 쓴다(다모다란은 값만 보여 준다).
     history 기록과 정렬에만 남아 있다."""
@@ -988,6 +1199,17 @@ def fetch(t):
     # 연간
     rev = _row(inc, ["Total Revenue"])
     revs = [float(x) for x in rev.values] if rev is not None else []
+
+    # 연도별 주식수 — 밸류 밴드에서 그 해 시가총액을 내는 데 쓴다
+    shares_hist = []
+    try:
+        sh_a = _row(bs, ["Ordinary Shares Number", "Share Issued"])
+        if sh_a is not None and rev is not None:
+            for dt in rev.index:
+                v_ = _at(sh_a, dt)
+                shares_hist.append(v_)
+    except Exception:
+        shares_hist = []
     op = _row(inc, ["Operating Income", "EBIT"])
     ni_a = _row(inc, ["Net Income"])
     eq = _row(bs, ["Stockholders Equity"])
@@ -1475,6 +1697,7 @@ def fetch(t):
         "growth": cagr,
         "qmargin": qmargin, "rev1y": rev1y, "px1y": px1y, "dd": dd,
         "revs": revs, "margins": margins, "roes": roes, "fcfs": fcfs,
+        "shares_hist": shares_hist,
         "y_years": y_years, "y_growth": y_growth, "y_margin": y_margin,
         "y_roic": y_roic, "y_debt": y_debt, "y_fcfm": y_fcfm,
         "cagr": cagr, "dil_annual": dil_annual, "dilution": dilution,
