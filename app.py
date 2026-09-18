@@ -33,6 +33,7 @@ import streamlit as st
 
 from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   score_damo, damo_verdict, yearly_series, implied_growth, RETIRED,
+                  value_verdict, year_end_prices,
                   YEARLY_AXES, YEARLY_TRI,
                   market_snapshot, vix_mood,
                   USD_KRW, chart_data,
@@ -754,6 +755,22 @@ def card(d, mode, band=None, buy=None):
         except Exception:
             pass
 
+    # 밸류 판정 한 줄. ★검증 안 된 값이라 그렇게 적는다.★
+    valline = ""
+    try:
+        g0, _, _ = implied_growth(d)
+        vv0 = value_verdict(d, year_end_prices(d["ticker"]), g0)
+        if vv0 and vv0.get("label") and vv0["label"] != "모름":
+            vc0 = {"저평가 쪽": "#16A34A",
+                   "고평가 쪽": "#DC2626"}.get(vv0["label"], MUTED)
+            valline = (f'<div class="bandline">'
+                       f'<span style="color:{MUTED}">밸류 '
+                       f'<span style="font-size:.64rem">(검증 안 됨)</span></span>'
+                       f'<span style="color:{vc0};font-weight:700">'
+                       f'{vv0["label"]}</span></div>')
+    except Exception:
+        pass
+
     bandline = ""
     bs = band_status(d["price"], band)
     if bs:
@@ -782,7 +799,7 @@ def card(d, mode, band=None, buy=None):
           <div class="px">{px}</div><div class="{cls}">{chtxt}</div></div>
       </div>
       {scorelines}
-      {buyline}{bandline}{fp_line(footprint(d['ticker']))}
+      {valline}{buyline}{bandline}{fp_line(footprint(d['ticker']))}
     </div>""", unsafe_allow_html=True)
 
 
@@ -878,16 +895,46 @@ def detail(d, band=None, buy=None):
     elif note_:
         vrows.append(("역산", note_))
 
+    # 밸류 판정 (저평가 / 적정 / 고평가 / 모름)
+    #   ★ 검증되지 않았다. 화면에 그렇게 적는다.
+    #     경계도 임의값이고, 밴드 표본이 3~4개뿐이다.
+    vv = None
+    try:
+        vv = value_verdict(d, year_end_prices(d["ticker"]),
+                           g_ if g_ is not None else None)
+    except Exception:
+        pass
+
     if vrows:
         st.markdown('<div class="sect">가격이 기대하는 것</div>',
+                    unsafe_allow_html=True)
+        if vv and vv.get("label"):
+            vc = {"저평가 쪽": "#16A34A", "고평가 쪽": "#DC2626",
+                  "모름": MUTED}.get(vv["label"], MUTED)
+            bn = vv.get("band_n") or 0
+            st.markdown(
+                f'<div style="display:flex;justify-content:space-between;'
+                f'align-items:center;margin-bottom:8px">'
+                f'<span class="badge" style="background:{vc}">'
+                f'{vv["label"]}</span>'
+                f'<span style="font-size:.68rem;color:{MUTED}">'
+                f'검증 안 됨 · 밴드 표본 {bn}개</span></div>',
+                unsafe_allow_html=True)
+            if vv.get("reasons"):
+                st.markdown("".join(
+                    f'<div style="font-size:.7rem;color:{MUTED};'
+                    f'padding:2px 0">· {r}</div>' for r in vv["reasons"]),
                     unsafe_allow_html=True)
         st.markdown("".join(
             f'<div class="metric"><span class="mk">{k}</span>'
             f'<span class="mv">{v}</span></div>' for k, v in vrows),
             unsafe_allow_html=True)
-        st.markdown('<p class="note">비싸다·싸다를 말하지 않습니다. '
+        st.markdown('<p class="note"><b>이 판정은 검증되지 않았습니다.</b> '
+                    '경계(하위 30% 등)는 임의로 정한 값이고, 자기 이력 밴드는 '
+                    '야후가 연간 재무를 4년치만 줘서 표본이 3~4개뿐입니다. '
+                    '6개월 뒤 verify 로 쓸모를 확인할 예정입니다.<br>'
                     '역산은 재투자 40%·세율 21%·자본비용 9%·영구성장 3% 를 '
-                    '가정한 값이며, 이 가정들은 임의로 정한 것입니다.</p>',
+                    '가정한 값이며, 이 가정들도 임의로 정한 것입니다.</p>',
                     unsafe_allow_html=True)
 
     st.markdown('<div class="sect">시장 지표</div>', unsafe_allow_html=True)
