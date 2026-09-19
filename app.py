@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-19 11:07"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-19 11:37"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -782,6 +782,27 @@ def card(d, mode, band=None, buy=None):
     except Exception:
         pass
 
+    # 최근 공시 한 줄.
+    #   SEC 는 야후와 다른 서버라 카드마다 불러도 야후 조회에 영향이 없다.
+    #   중요한 것만 한 줄 (임원 매매는 상세 화면에서 본다).
+    filline = ""
+    try:
+        fl0 = filings(d["ticker"], 6)
+        main0, _ = split_filings(fl0)
+        if main0:
+            x0 = main0[0]
+            w0 = item_text(x0.get("items")) or x0.get("kind") or x0["form"]
+            c0 = ("#16A34A" if "실적" in w0 or "계약" in w0
+                  else "#DC2626" if "신뢰 불가" in w0 or "상장폐지" in w0
+                  else CHARCOAL)
+            filline = (f'<div class="bandline">'
+                       f'<span style="color:{MUTED}">{x0["date"][5:]} '
+                       f'{x0["form"]}</span>'
+                       f'<span style="color:{c0};font-weight:600">{w0}</span>'
+                       f'</div>')
+    except Exception:
+        pass
+
     bandline = ""
     bs = band_status(d["price"], band)
     if bs:
@@ -810,7 +831,7 @@ def card(d, mode, band=None, buy=None):
           <div class="px">{px}</div><div class="{cls}">{chtxt}</div></div>
       </div>
       {scorelines}
-      {valline}{buyline}{bandline}{fp_line(footprint(d['ticker']))}
+      {filline}{valline}{buyline}{bandline}{fp_line(footprint(d['ticker']))}
     </div>""", unsafe_allow_html=True)
 
 
@@ -964,10 +985,18 @@ def detail(d, band=None, buy=None):
 
     # ── 공시 ──
     #   회사가 법적 책임을 지고 낸 원문. 뉴스보다 확실하고 빠르다.
+    fl, fl_err = [], None
     try:
         fl = filings(d["ticker"], 6)
-    except Exception:
-        fl = []
+    except Exception as e:
+        fl_err = f"{type(e).__name__}: {e}"
+    if not fl:
+        st.markdown('<div class="sect">최근 공시</div>', unsafe_allow_html=True)
+        st.markdown(f'<p class="note">'
+                    + (f'못 가져왔습니다 — {fl_err}' if fl_err
+                       else 'SEC 에서 공시를 못 받았습니다. '
+                            '미국 상장사만 됩니다.')
+                    + '</p>', unsafe_allow_html=True)
     if fl:
         main_f, ins_f = split_filings(fl)
 
@@ -1004,10 +1033,18 @@ def detail(d, band=None, buy=None):
     #   ★ 호재·악재 판단은 하지 않는다. 제목과 출처만 옮긴다.
     #     상세 화면에서만 부른다. 대시보드 카드마다 부르면
     #     야후 호출이 종목 수만큼 늘어 차단된다.
+    nl, nl_err = [], None
     try:
         nl = news(d["ticker"], 6)
-    except Exception:
-        nl = []
+    except Exception as e:
+        nl_err = f"{type(e).__name__}: {e}"
+    if not nl:
+        # 조용히 숨기면 왜 안 나오는지 알 수 없다. 이유를 적는다.
+        st.markdown('<div class="sect">뉴스</div>', unsafe_allow_html=True)
+        st.markdown(f'<p class="note">'
+                    + (f'못 가져왔습니다 — {nl_err}' if nl_err
+                       else '야후가 이 종목 뉴스를 주지 않았습니다.')
+                    + '</p>', unsafe_allow_html=True)
     if nl:
         st.markdown('<div class="sect">뉴스</div>', unsafe_allow_html=True)
         rows_n = []
