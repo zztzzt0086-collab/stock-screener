@@ -31,7 +31,8 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
-from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
+from core import (BUILD as CORE_BUILD,
+                  TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   score_damo, damo_verdict, yearly_series, implied_growth, RETIRED,
                   value_verdict, year_end_prices,
                   YEARLY_AXES, YEARLY_TRI,
@@ -44,6 +45,8 @@ from core import (TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
 
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
+
+APP_BUILD = "2026-09-19 02:33"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -755,29 +758,13 @@ def card(d, mode, band=None, buy=None):
         except Exception:
             pass
 
-    # 밸류 판정 한 줄. ★검증 안 된 값이라 그렇게 적는다.★
-    #   ★ 여기서는 과거 주가를 받지 않는다.
-    #     카드마다 야후를 한 번 더 부르면 관심종목 6개에 18회가 되고,
-    #     야후가 막으면 그 뒤로 아무것도 못 받아온다.
-    #     ("데이터를 찾을 수 없습니다" 가 그 증상이었다)
-    #   그래서 대시보드는 역산 하나만 쓰고, 자기 이력 밴드는
-    #   상세 화면에서만 본다.
+    # 밸류 판정은 뺐다.
+    #   93종목 중 82개가 "고평가 쪽" 으로 나왔다 (2026-09-19 valstat).
+    #   거의 다 같은 답이면 가려내는 게 아니다.
+    #   밴드 표본이 4개뿐이고 그중 둘이 급등기(2024·2025)라
+    #   무엇을 넣어도 상단으로 간다.
+    #   기록은 계속 쌓는다. 6개월 뒤 verify 로 확인한 다음 다시 낸다.
     valline = ""
-    try:
-        g0, _, _ = implied_growth(d)
-        if g0 is not None and d.get("cagr") is not None:
-            gap0 = g0 * 100 - d["cagr"]
-            if abs(gap0) >= 5:          # 5%p 미만은 굳이 말하지 않는다
-                lab0 = "기대 > 실적" if gap0 > 0 else "기대 < 실적"
-                vc0 = "#DC2626" if gap0 > 0 else "#16A34A"
-                valline = (f'<div class="bandline">'
-                           f'<span style="color:{MUTED}">역산 '
-                           f'<span style="font-size:.64rem">(검증 안 됨)</span>'
-                           f'</span>'
-                           f'<span style="color:{vc0};font-weight:700">'
-                           f'{lab0} {abs(gap0):.0f}%p</span></div>')
-    except Exception:
-        pass
 
     bandline = ""
     bs = band_status(d["price"], band)
@@ -903,47 +890,21 @@ def detail(d, band=None, buy=None):
     elif note_:
         vrows.append(("역산", note_))
 
-    # 밸류 판정 (저평가 / 적정 / 고평가 / 모름)
-    #   ★ 검증되지 않았다. 화면에 그렇게 적는다.
-    #     경계도 임의값이고, 밴드 표본이 3~4개뿐이다.
-    vv = None
-    try:
-        vv = value_verdict(d, year_end_prices(d["ticker"]),
-                           g_ if g_ is not None else None)
-    except Exception:
-        pass
-
+    # 저평가/고평가 배지는 뺐다. 93개 중 82개가 "고평가 쪽" 이었다.
+    # 숫자는 그대로 보여 주고 판단은 사람이 한다.
     if vrows:
         st.markdown('<div class="sect">가격이 기대하는 것</div>',
-                    unsafe_allow_html=True)
-        if vv and vv.get("label"):
-            vc = {"저평가 쪽": "#16A34A", "고평가 쪽": "#DC2626",
-                  "모름": MUTED}.get(vv["label"], MUTED)
-            bn = vv.get("band_n") or 0
-            st.markdown(
-                f'<div style="display:flex;justify-content:space-between;'
-                f'align-items:center;margin-bottom:8px">'
-                f'<span class="badge" style="background:{vc}">'
-                f'{vv["label"]}</span>'
-                f'<span style="font-size:.68rem;color:{MUTED}">'
-                f'검증 안 됨 · 밴드 표본 {bn}개</span></div>',
-                unsafe_allow_html=True)
-            if vv.get("reasons"):
-                st.markdown("".join(
-                    f'<div style="font-size:.7rem;color:{MUTED};'
-                    f'padding:2px 0">· {r}</div>' for r in vv["reasons"]),
                     unsafe_allow_html=True)
         st.markdown("".join(
             f'<div class="metric"><span class="mk">{k}</span>'
             f'<span class="mv">{v}</span></div>' for k, v in vrows),
             unsafe_allow_html=True)
-        st.markdown('<p class="note"><b>이 판정은 검증되지 않았습니다.</b> '
-                    '경계(하위 30% 등)는 임의로 정한 값이고, 자기 이력 밴드는 '
-                    '야후가 연간 재무를 4년치만 줘서 표본이 3~4개뿐입니다. '
-                    '6개월 뒤 verify 로 쓸모를 확인할 예정입니다.<br>'
+        st.markdown('<p class="note">비싸다·싸다를 말하지 않습니다. '
                     '역산은 재투자 40%·세율 21%·자본비용 9%·영구성장 3% 를 '
-                    '가정한 값이며, 이 가정들도 임의로 정한 것입니다.</p>',
-                    unsafe_allow_html=True)
+                    '가정한 값이며, 이 가정들은 임의로 정한 것입니다.<br>'
+                    '저평가/고평가 판정은 화면에서 뺐습니다. 93종목 중 82개가 '
+                    '같은 답이 나와 가려내지 못했습니다. 기록은 계속 쌓고 '
+                    '6개월 뒤 검증합니다.</p>', unsafe_allow_html=True)
 
     st.markdown('<div class="sect">시장 지표</div>', unsafe_allow_html=True)
     rows = []
@@ -1120,6 +1081,7 @@ def main():
         if not watch:
             st.caption("등록된 종목이 없습니다.")
         else:
+            st.caption(f"app.py {APP_BUILD} · core.py {CORE_BUILD}")
             st.caption("진입밴드는 225-250 처럼 입력 (단일값 158도 가능, "
                        "비우면 해제). 내 매수가는 대시보드 카드 아래에서 "
                        "넣습니다.")

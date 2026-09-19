@@ -81,19 +81,67 @@ def pool_from_wiki(url, col_candidates):
     except Exception as e:
         print(f"  표 해석 실패({e}).", end=" ")
         return []
+    # 컬럼 이름을 너그럽게 찾는다.
+    #   위키피디아가 "Ticker" → "Ticker symbol" 처럼 바꾸면
+    #   정확히 일치로만 찾던 예전 코드는 표를 통째로 놓쳤다.
+    #   (나스닥100 이 계속 실패하던 이유로 의심된다)
+    want = {c.lower() for c in col_candidates}
+
+    def _looks_like_ticker_col(name):
+        n = str(name).strip().lower()
+        if n in want:
+            return True
+        return any(w in n for w in ("ticker", "symbol"))
+
+    seen_cols = []
     for t in tables:
-        for c in t.columns:
-            if str(c).strip() in col_candidates:
-                vals = t[c].dropna().astype(str).str.strip()
-                out = [v.replace(".", "-") for v in vals
-                       if 1 <= len(v) <= 6 and v.replace("-", "").isalpha()]
-                if len(out) > 50:
-                    try:
-                        with open(p, "w", encoding="utf-8") as f:
-                            json.dump(out, f)
-                    except Exception:
-                        pass
-                    return out
+        # 컬럼이 2단(MultiIndex)인 표도 있다. 납작하게 편다.
+        cols = list(t.columns)
+        flat = []
+        for c in cols:
+            if isinstance(c, tuple):
+                flat.append(" ".join(str(x) for x in c if "Unnamed" not in str(x)))
+            else:
+                flat.append(str(c))
+        seen_cols.append(flat)
+        for c, name in zip(cols, flat):
+            if not _looks_like_ticker_col(name):
+                continue
+            # ★ 위키피디아 표에는 눈에 안 보이는 문자가 섞여 있다.
+            #   제로폭 공백(\u200b) · 소프트하이픈(\xad) · 줄바꿈 없는 공백(\xa0)
+            #   화면엔 "NVDA" 로 보이지만 strip() 으로 안 떨어지고
+            #   isalpha() 가 False 가 되어 통째로 걸러졌다.
+            #   (나스닥100 이 계속 실패하던 진짜 이유)
+            import re as _re
+            def _clean(v):
+                v = _re.sub(r"[\u200b\u200c\u200d\u00ad\ufeff\u00a0\s]", "", str(v))
+                v = _re.sub(r"\[.*?\]", "", v)      # [1] 같은 각주 제거
+                return v.strip()
+
+            vals = [_clean(v) for v in t[c].dropna().astype(str)]
+            # 점을 먼저 하이픈으로 바꾸고 검사한다.
+            #   BRK.B · BF.B 처럼 점이 든 티커가 걸러지고 있었다.
+            def _ok(v):
+                w = v.replace(".", "-")
+                return 1 <= len(w) <= 6 and w.replace("-", "").isalpha()
+
+            out = [v.replace(".", "-") for v in vals if _ok(v)]
+            if len(out) < 20 and vals:
+                bad = [v for v in vals if not _ok(v)]
+                print(f"  [{name}] 값 {len(vals)}개 중 티커 {len(out)}개."
+                      f" 걸러진 예: {[repr(x) for x in bad[:3]]}", end="  ")
+            if len(out) >= 20:          # 50 → 20. 작은 지수도 받기 위함
+                try:
+                    with open(p, "w", encoding="utf-8") as f:
+                        json.dump(out, f)
+                except Exception:
+                    pass
+                return out
+
+    # 실패했으면 무엇을 봤는지 알려 준다. 그래야 고칠 수 있다.
+    print(f"  표 {len(tables)}개에서 티커 열을 못 찾음.", end=" ")
+    for i, fl in enumerate(seen_cols[:4]):
+        print(f"[{i}] {', '.join(fl[:6])}", end="  ")
     return []
 
 

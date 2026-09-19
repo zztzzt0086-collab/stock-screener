@@ -43,6 +43,9 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                  ★ v1 으로 쌓은 history 는 지문이 달라 verify 에서
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
+# 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
+BUILD = "2026-09-19 02:33"
+
 SCORE_VERSION = 2
 
 USD_KRW = 1380
@@ -1172,6 +1175,21 @@ def fetch(t):
     # 분기 이익률
     qmargin = []
     qr, qo = _row(qi, ["Total Revenue"]), _row(qi, ["Operating Income", "EBIT"])
+
+    # 실적 대조용 — 분기 매출·영업이익을 날짜와 함께 남긴다
+    q_hist = []
+    try:
+        if qr is not None:
+            for dt in qr.index:                      # _row 가 오래된→최신 정렬
+                r_ = _at(qr, dt)
+                if r_ is None or r_ <= 0:
+                    continue
+                o_ = _at(qo, dt) if qo is not None else None
+                q_hist.append({"date": str(dt)[:10], "rev": r_,
+                               "op": o_,
+                               "margin": (o_ / r_ * 100) if o_ is not None else None})
+    except Exception:
+        q_hist = []
     if qr is not None and qo is not None:
         for dt in list(qr.index)[::-1]:
             if dt in qo.index and float(qr[dt]) > 0:
@@ -1256,8 +1274,8 @@ def fetch(t):
             if not (isinstance(tax_r, (int, float)) and 0 <= tax_r < 0.6):
                 tax_r = 0.21
 
-            cash_row = _row(bs, ["Cash And Cash Equivalents",
-                                 "Cash Cash Equivalents And Short Term Investments"])
+            cash_row = _row(bs, ["Cash Cash Equivalents And Short Term Investments",
+                                 "Cash And Cash Equivalents"])
             debt_row = _row(bs, ["Total Debt"])
 
             for i, dt_ in enumerate(dates):
@@ -1337,7 +1355,10 @@ def fetch(t):
 
     # R&D 집중도 (매출 대비 %)
     rnd = None
-    rd_ = _row(inc, ["Research And Development"])
+    # 야후는 회사마다 행 이름이 다르다. 후보를 여러 개 준다.
+    rd_ = _row(inc, ["Research And Development",
+                     "Research Development",
+                     "Research & Development"])
     if rd_ is not None and rev is not None:
         try:
             rv = float(rev.iloc[-1])
@@ -1381,8 +1402,8 @@ def fetch(t):
 
                 equity_ = float(eq_[dt_])
                 debt_t = _row(bs, ["Total Debt"])
-                cash_t = _row(bs, ["Cash And Cash Equivalents",
-                                   "Cash Cash Equivalents And Short Term Investments"])
+                cash_t = _row(bs, ["Cash Cash Equivalents And Short Term Investments",
+                                   "Cash And Cash Equivalents"])
 
                 d_ = _at(debt_t, dt_)
                 c_ = _at(cash_t, dt_)
@@ -1631,12 +1652,12 @@ def fetch(t):
     netcash = None
     netcash_note = None
     try:
-        cash = _last(qb, ["Cash And Cash Equivalents",
-                            "Cash Cash Equivalents And Short Term Investments"])
+        cash = _last(qb, ["Cash Cash Equivalents And Short Term Investments",
+                            "Cash And Cash Equivalents"])
         debt_q = _last(qb, ["Total Debt"])
         if cash is None:                      # 분기에 없으면 연간으로
-            cash = _last(bs, ["Cash And Cash Equivalents",
-                                "Cash Cash Equivalents And Short Term Investments"])
+            cash = _last(bs, ["Cash Cash Equivalents And Short Term Investments",
+                                "Cash And Cash Equivalents"])
         if debt_q is None:
             debt_q = _last(bs, ["Total Debt"])
         if cash is not None:
@@ -1704,7 +1725,8 @@ def fetch(t):
         "ocf": ocf_s, "ni": ni_s, "cover": cover, "netcash": netcash,
         "netcash_note": netcash_note,
         "beats": beats,
-        "qgrowth": qgrowth, "rnd": rnd, "dy": dy, "div_yrs": div_yrs,
+        "qgrowth": qgrowth, "q_hist": q_hist,
+        "rnd": rnd, "dy": dy, "div_yrs": div_yrs,
         "roic": roic, "roic_note": roic_note, "roic_asof": roic_asof,
         "reinv_eff": reinv_eff, "reinv_note": reinv_note,
         "fcf_last": fcf_last, "ocf_last": ocf_last,
