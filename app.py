@@ -34,7 +34,8 @@ import streamlit as st
 from core import (BUILD as CORE_BUILD,
                   TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   score_damo, damo_verdict, yearly_series, implied_growth, RETIRED,
-                  value_verdict, year_end_prices,
+                  value_verdict, year_end_prices, news,
+                  filings, item_text, split_filings,
                   YEARLY_AXES, YEARLY_TRI,
                   market_snapshot, vix_mood,
                   USD_KRW, chart_data,
@@ -758,13 +759,28 @@ def card(d, mode, band=None, buy=None):
         except Exception:
             pass
 
-    # 밸류 판정은 뺐다.
-    #   93종목 중 82개가 "고평가 쪽" 으로 나왔다 (2026-09-19 valstat).
-    #   거의 다 같은 답이면 가려내는 게 아니다.
-    #   밴드 표본이 4개뿐이고 그중 둘이 급등기(2024·2025)라
-    #   무엇을 넣어도 상단으로 간다.
-    #   기록은 계속 쌓는다. 6개월 뒤 verify 로 확인한 다음 다시 낸다.
+    # 밸류 판정 한 줄. ★아직 검증 안 된 값이라 그렇게 적는다.★
+    #   ★ 여기서는 과거 주가를 받지 않는다.
+    #     카드마다 야후를 한 번 더 부르면 관심종목 6개에 18회가 되고,
+    #     야후가 막으면 그 뒤로 아무것도 못 받아온다.
+    #   그래서 대시보드는 역산 하나만 쓰고, 자기 이력 밴드는
+    #   상세 화면에서만 본다.
     valline = ""
+    try:
+        g0, _, _ = implied_growth(d)
+        if g0 is not None and d.get("cagr") is not None:
+            gap0 = g0 * 100 - d["cagr"]
+            if abs(gap0) >= 5:          # 5%p 미만은 굳이 말하지 않는다
+                lab0 = "기대 > 실적" if gap0 > 0 else "기대 < 실적"
+                vc0 = "#DC2626" if gap0 > 0 else "#16A34A"
+                valline = (f'<div class="bandline">'
+                           f'<span style="color:{MUTED}">역산 '
+                           f'<span style="font-size:.64rem">(검증 전)</span>'
+                           f'</span>'
+                           f'<span style="color:{vc0};font-weight:700">'
+                           f'{lab0} {abs(gap0):.0f}%p</span></div>')
+    except Exception:
+        pass
 
     bandline = ""
     bs = band_status(d["price"], band)
@@ -890,21 +906,115 @@ def detail(d, band=None, buy=None):
     elif note_:
         vrows.append(("역산", note_))
 
-    # 저평가/고평가 배지는 뺐다. 93개 중 82개가 "고평가 쪽" 이었다.
-    # 숫자는 그대로 보여 주고 판단은 사람이 한다.
+    # 밸류 판정 (저평가 / 적정 / 고평가 / 모름)
+    #   ★ 아직 검증 안 됐다. 화면에 그렇게 적는다.
+    #     2026-09-19 valstat: 209종목 중 154개(74%)가 "고평가 쪽".
+    #     한쪽으로 몰리는 것은 (가) 지금이 실제로 비싼 구간이거나
+    #     (나) 밴드 표본이 4개뿐이라 그렇다. 아직 못 가렸다.
+    vv = None
+    try:
+        vv = value_verdict(d, year_end_prices(d["ticker"]),
+                           g_ if g_ is not None else None)
+    except Exception:
+        pass
+
     if vrows:
-        st.markdown('<div class="sect">가격이 기대하는 것</div>',
+        st.markdown('<div class="sect">이 값이 싼지 비싼지</div>',
+                    unsafe_allow_html=True)
+        if vv and vv.get("label"):
+            vc = {"저평가 쪽": "#16A34A", "고평가 쪽": "#DC2626",
+                  "모름": MUTED}.get(vv["label"], MUTED)
+            bn = vv.get("band_n") or 0
+            st.markdown(
+                f'<div style="display:flex;justify-content:space-between;'
+                f'align-items:center;margin-bottom:8px">'
+                f'<span class="badge" style="background:{vc}">'
+                f'{vv["label"]}</span>'
+                f'<span style="font-size:.68rem;color:{MUTED}">'
+                f'{bn}개 해와 견줘 봄 · 아직 맞는지 모름</span></div>',
+                unsafe_allow_html=True)
+            if vv.get("reasons"):
+                st.markdown("".join(
+                    f'<div style="font-size:.7rem;color:{MUTED};'
+                    f'padding:2px 0">· {r}</div>' for r in vv["reasons"]),
                     unsafe_allow_html=True)
         st.markdown("".join(
             f'<div class="metric"><span class="mk">{k}</span>'
             f'<span class="mv">{v}</span></div>' for k, v in vrows),
             unsafe_allow_html=True)
-        st.markdown('<p class="note">비싸다·싸다를 말하지 않습니다. '
-                    '역산은 재투자 40%·세율 21%·자본비용 9%·영구성장 3% 를 '
-                    '가정한 값이며, 이 가정들은 임의로 정한 것입니다.<br>'
-                    '저평가/고평가 판정은 화면에서 뺐습니다. 93종목 중 82개가 '
-                    '같은 답이 나와 가려내지 못했습니다. 기록은 계속 쌓고 '
-                    '6개월 뒤 검증합니다.</p>', unsafe_allow_html=True)
+        st.markdown('<p class="note"><b>이 결과가 맞는지는 아직 모릅니다.</b> '
+                    '209종목을 돌려 보니 154개(74%)가 비싼 쪽으로 '
+                    '나왔습니다. 정말 비싼 때이거나, 견줄 해가 4년치뿐이라 '
+                    '그렇게 보이는 것일 수도 있습니다. '
+                    '아직 못 가렸습니다.<br>'
+                    '계산에 쓴 가정은 재투자 40%·세율 21%·자본비용 9%·영구성장 3% 이고, '
+                    '전부 저희가 임의로 정한 값입니다.</p>',
+                    unsafe_allow_html=True)
+
+    # ── 공시 ──
+    #   회사가 법적 책임을 지고 낸 원문. 뉴스보다 확실하고 빠르다.
+    try:
+        fl = filings(d["ticker"], 6)
+    except Exception:
+        fl = []
+    if fl:
+        main_f, ins_f = split_filings(fl)
+
+        def _frows(rows):
+            out = []
+            for x in rows:
+                it = item_text(x.get("items"))
+                what = it or x.get("kind") or ""
+                cf = ("#16A34A" if it and ("실적" in it or "계약" in it)
+                      else "#DC2626" if it and ("신뢰 불가" in it or "상장폐지" in it)
+                      else CHARCOAL)
+                w = (f'<a href="{x["link"]}" target="_blank" '
+                     f'style="color:{cf};text-decoration:none">{what}</a>'
+                     if x.get("link") else f'<span style="color:{cf}">{what}</span>')
+                out.append(
+                    f'<div class="metric"><span class="mk">{x["date"]} '
+                    f'<b style="color:{CHARCOAL}">{x["form"]}</b></span>'
+                    f'<span class="mv">{w}</span></div>')
+            return "".join(out)
+
+        if main_f:
+            st.markdown('<div class="sect">최근 공시</div>',
+                        unsafe_allow_html=True)
+            st.markdown(_frows(main_f), unsafe_allow_html=True)
+            st.markdown('<p class="note">회사가 직접 낸 서류입니다. 8-K 는 실적·계약·임원 변경을 '
+                        '며칠 안에 내야 해서 기사보다 먼저 올라옵니다.</p>',
+                        unsafe_allow_html=True)
+        # 임원 매매는 건수가 많아 중요 공시를 밀어낸다. 접어 둔다.
+        if ins_f:
+            with st.expander(f"임원·대주주 매매  {len(ins_f)}건"):
+                st.markdown(_frows(ins_f), unsafe_allow_html=True)
+
+    # ── 뉴스 ──
+    #   ★ 호재·악재 판단은 하지 않는다. 제목과 출처만 옮긴다.
+    #     상세 화면에서만 부른다. 대시보드 카드마다 부르면
+    #     야후 호출이 종목 수만큼 늘어 차단된다.
+    try:
+        nl = news(d["ticker"], 6)
+    except Exception:
+        nl = []
+    if nl:
+        st.markdown('<div class="sect">뉴스</div>', unsafe_allow_html=True)
+        rows_n = []
+        for it in nl:
+            meta = " · ".join(x for x in (it.get("source"), it.get("ago")) if x)
+            t_ = it["title"]
+            if it.get("link"):
+                t_ = (f'<a href="{it["link"]}" target="_blank" '
+                      f'style="color:{CHARCOAL};text-decoration:none">{t_}</a>')
+            rows_n.append(
+                f'<div style="padding:7px 0;border-bottom:1px solid #F1F1F2">'
+                f'<div style="font-size:.8rem;line-height:1.35">{t_}</div>'
+                f'<div style="font-size:.66rem;color:{MUTED};margin-top:2px">'
+                f'{meta}</div></div>')
+        st.markdown("".join(rows_n), unsafe_allow_html=True)
+        st.markdown('<p class="note">야후에서 가져온 제목입니다. '
+                    '좋은지 나쁜지는 안 봅니다.</p>',
+                    unsafe_allow_html=True)
 
     st.markdown('<div class="sect">시장 지표</div>', unsafe_allow_html=True)
     rows = []
@@ -995,7 +1105,7 @@ def main():
                             unsafe_allow_html=True)
 
             # 수급이 한쪽으로 크게 치우친 종목 표시.
-            # 백테스트 결과 수급 점수는 이후 수익률과 상관이 없었다(-0.03).
+            # 백테스트 판정 수급 점수는 이후 수익률과 상관이 없었다(-0.03).
             # 그래서 "사라/팔라"가 아니라 "왜 이런지 확인해 보라"는 안내로 쓴다.
             # 매수 우위만이 아니라 매도 우위도 똑같이 보여 준다.
             for d in data:

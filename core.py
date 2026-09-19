@@ -73,9 +73,11 @@ CACHE_DIR = ".cache"
 def _file_cache(ttl):
     """CLI 전용 디스크 캐시 데코레이터."""
     def deco(fn):
-        def wrap(*a):
+        def wrap(*a, **kw):
+            # 키워드 인자도 받는다. 안 받으면 filings(t, kinds=[...]) 가 터진다.
             os.makedirs(CACHE_DIR, exist_ok=True)
-            key = f"{fn.__name__}_{'_'.join(map(str, a))}".replace("/", "_")
+            parts = list(map(str, a)) + [f"{k}={v}" for k, v in sorted(kw.items())]
+            key = f"{fn.__name__}_{'_'.join(parts)}".replace("/", "_")
             p = os.path.join(CACHE_DIR, key + ".json")
             if os.path.exists(p) and time.time() - os.path.getmtime(p) < ttl:
                 try:
@@ -83,7 +85,7 @@ def _file_cache(ttl):
                         return json.load(f)
                 except Exception:
                     pass
-            r = fn(*a)
+            r = fn(*a, **kw)
             try:
                 with open(p, "w", encoding="utf-8") as f:
                     json.dump(r, f, ensure_ascii=False, default=str)
@@ -566,7 +568,7 @@ def score_damo(d, wacc=None):
 
     # ⑤ 숫자가 튀어 좋아 보이는 함정 (10점)
     #    PEG 0.2 미만 = 적자→흑자 전환 착시
-    #    ROE 100% 초과 = 자기자본이 쪼그라든 결과
+    #    ROE 100% 초과 = 자기자본이 쪼그라든 판정
     peg, roe = d.get("peg"), d.get("roe")
     traps = []
     if peg is not None and 0 < peg < 0.2:
@@ -931,7 +933,7 @@ def vix_mood(v):
 
 
 # ═════════════════════════════════════════════════════════════
-# 밸류 판정 — 자기 이력 대비
+# 밸류 판정 — 자기 이력 백분위
 #
 #   PER 절대수준으로 싸다/비싸다를 가리면 주기 종목에서 거꾸로 간다.
 #   MU 가 그 예다: TTM 이익률 80%, PER 21 이라 싸 보이지만
@@ -978,7 +980,7 @@ def year_end_prices(t, years=6):
 
 
 def value_band(d, px_hist=None):
-    """자기 이력 대비 지금 밸류가 어디쯤인가.
+    """자기 이력 백분위 지금 밸류가 어디쯤인가.
 
     px_hist : {"2022": 연말종가, ...} 형태. 없으면 밴드는 못 낸다.
 
@@ -1001,7 +1003,7 @@ def value_band(d, px_hist=None):
         out["note"] = "매출·이익률·시가총액 중 없는 것이 있다"
         return out
 
-    # ① 정상화 이익 — 현재 매출 × 과거 평균 이익률
+    # ① 정상화 이익 — 현재 매출 × 정상화 이익률
     nm = sum(margins) / len(margins)
     out["norm_margin"] = nm
     rev0 = float(revs[-1])
@@ -1798,6 +1800,229 @@ def lt_verdict(p):
     if p >= 58: return "중상위", AMBER
     if p >= 40: return "중하위", SLATE
     return "하위권", MUTED
+
+
+
+
+# ═════════════════════════════════════════════════════════════
+# SEC 공시 (EDGAR)
+#
+#   회사가 법적 책임을 지고 낸 원문이다. 뉴스보다 확실하고 빠르다.
+#   8-K 는 실적발표·대형계약·경영진 변경 같은 것을 며칠 안에 내야 한다.
+#   기자가 기사를 쓰기 전에 여기 먼저 올라온다.
+#
+#   ★ SEC 는 인증이 필요 없지만 User-Agent 에 연락처를 요구한다.
+#     안 넣으면 차단된다.
+#   ★ 미국 상장사만 된다. 해외 ADR(TSM·ASML)은 20-F·6-K 만 낸다.
+# ═════════════════════════════════════════════════════════════
+
+SEC_UA = "gyong-screener (contact: zztzzt0086@gmail.com)"
+
+# 8-K 항목 번호의 뜻. 번호만 보면 무슨 일인지 모른다.
+ITEM_KIND = {
+    "1.01": "중요 계약 체결",
+    "1.02": "중요 계약 해지",
+    "2.01": "자산 취득·처분 완료",
+    "2.02": "실적 발표",
+    "2.03": "채무 발생",
+    "3.01": "상장 규정 위반·상장폐지 통보",
+    "3.02": "미등록 주식 발행",
+    "4.01": "회계법인 변경",
+    "4.02": "과거 재무제표 신뢰 불가",
+    "5.02": "임원 선임·사임",
+    "5.07": "주주총회 판정",
+    "7.01": "공정공시 자료",
+    "8.01": "기타 중요 사항",
+    "9.01": "첨부 서류",
+}
+
+
+def item_text(items):
+    """8-K 항목 번호를 말로. "2.02,9.01" → "실적 발표" """
+    if not items:
+        return ""
+    out = []
+    for x in str(items).split(","):
+        x = x.strip()
+        if x == "9.01":          # 첨부 서류는 내용이 없다
+            continue
+        t = ITEM_KIND.get(x)
+        if t:
+            out.append(t)
+    return " · ".join(out)
+
+
+# 무슨 서류인지 한 줄로
+FILING_KIND = {
+    "8-K":   "수시공시 (실적·계약·경영진 등)",
+    "10-Q":  "분기보고서",
+    "10-K":  "연간보고서",
+    "S-1":   "증권신고서 (신규 상장·증자)",
+    "S-3":   "증권신고서 (추가 발행)",
+    "424B5": "증권 발행 확정",
+    "DEF 14A": "위임장 (주총 안건·임원 보수)",
+    "SC 13D": "5% 이상 취득 (경영참여 목적)",
+    "SC 13G": "5% 이상 취득 (단순투자)",
+    "4":     "임원·대주주 매매",
+    "3":     "임원·대주주 최초 보고",
+    "5":     "임원·대주주 연간 보고",
+    "144":   "대주주 매도 예정 신고",
+    "SC 13D/A": "5% 취득 변경 (경영참여)",
+    "SC 13G/A": "5% 취득 변경 (단순투자)",
+    "20-F":  "외국기업 연간보고서",
+    "6-K":   "외국기업 수시보고",
+}
+
+
+@cache(86400)
+def _sec_ticker_map():
+    """티커 → CIK(회사 고유번호). 하루 한 번이면 충분하다."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers={"User-Agent": SEC_UA})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = json.load(r)
+    except Exception:
+        return {}
+    out = {}
+    for v in raw.values():
+        t = str(v.get("ticker", "")).upper()
+        if t:
+            out[t] = str(v.get("cik_str", "")).zfill(10)
+    return out
+
+
+# 뒤로 미는 서류.
+#   임원 매매(Form 3/4/5)와 매도예정(144)은 하루에도 수십 건 올라와
+#   중요한 공시를 밀어낸다. 빼지는 않고 아래로 내린다.
+NOISE_FORMS = {"3", "4", "5", "144"}
+
+
+def split_filings(fl):
+    """중요 공시와 임원 매매로 가른다.
+
+    돌려주는 값: (중요, 임원매매)
+    """
+    main = [x for x in fl if x["form"] not in NOISE_FORMS]
+    insider = [x for x in fl if x["form"] in NOISE_FORMS]
+    return main, insider
+
+
+@cache(1800)
+def filings(t, n=10, kinds=None, all_forms=False):
+    """최근 공시 목록. 실패하면 빈 리스트.
+
+    kinds      그 서류만 (예: ["8-K", "10-Q"])
+    all_forms  True 면 임원 매매까지 전부
+    """
+    import urllib.request
+    cik = _sec_ticker_map().get(str(t).upper().replace("-", "-"))
+    if not cik:
+        return []
+    try:
+        req = urllib.request.Request(
+            f"https://data.sec.gov/submissions/CIK{cik}.json",
+            headers={"User-Agent": SEC_UA})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.load(r)
+    except Exception:
+        return []
+
+    recent = (data.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    accs = recent.get("accessionNumber") or []
+    docs = recent.get("primaryDocument") or []
+    descs = recent.get("primaryDocDescription") or []
+    items = recent.get("items") or []
+
+    out = []
+    seen = set()                    # 같은 접수번호가 여러 줄로 오는 일이 있다
+    for i in range(min(len(forms), len(dates))):
+        form = forms[i]
+        if kinds and form not in kinds:
+            continue
+
+        acc_raw = accs[i] if i < len(accs) else ""
+        if acc_raw and acc_raw in seen:
+            continue
+        if acc_raw:
+            seen.add(acc_raw)
+        acc = acc_raw.replace("-", "")
+        doc = docs[i] if i < len(docs) else ""
+        link = (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+                f"{acc}/{doc}") if acc and doc else ""
+        out.append({
+            "form": form,
+            "date": dates[i],
+            "kind": FILING_KIND.get(form, ""),
+            "desc": (descs[i] if i < len(descs) else "") or "",
+            "items": (items[i] if i < len(items) else "") or "",
+            "link": link,
+        })
+        if len(out) >= max(n * 6, 60):     # 넉넉히 받아 두고 아래에서 가른다
+            break
+
+    # 중요 공시를 앞으로, 임원 매매를 뒤로
+    main = [x for x in out if x["form"] not in NOISE_FORMS]
+    insider = [x for x in out if x["form"] in NOISE_FORMS]
+    if kinds or all_forms:
+        return out[:n]
+    # 중요한 것 n 건 + 임원 매매 몇 건
+    return main[:n] + insider[:max(0, n - len(main[:n])) or 3]
+
+
+@cache(1800)
+def news(t, n=6):
+    """야후가 주는 최근 뉴스. 실패하면 빈 리스트.
+
+    ★ 호재·악재 판단은 사람이 한다. 우리는 제목과 링크만 옮긴다.
+      야후가 주는 항목 이름이 버전마다 달라서 여러 이름을 찾는다.
+    """
+    try:
+        raw = yf.Ticker(t).news or []
+    except Exception:
+        return []
+    out = []
+    for it in raw[:n * 2]:
+        # 새 형식은 {"content": {...}}, 옛 형식은 평평한 dict
+        c = it.get("content") if isinstance(it.get("content"), dict) else it
+        title = (c.get("title") or c.get("headline") or "").strip()
+        if not title:
+            continue
+        pub = (c.get("provider") or {})
+        src = (pub.get("displayName") if isinstance(pub, dict) else None) \
+            or c.get("publisher") or ""
+        link = ""
+        for k in ("canonicalUrl", "clickThroughUrl", "link"):
+            v = c.get(k)
+            if isinstance(v, dict):
+                v = v.get("url")
+            if v:
+                link = v
+                break
+        when = c.get("pubDate") or c.get("displayTime") or c.get("providerPublishTime")
+        ago = None
+        try:
+            if isinstance(when, (int, float)):
+                dt_ = datetime.fromtimestamp(when)
+            elif isinstance(when, str) and when:
+                dt_ = datetime.fromisoformat(when.replace("Z", "+00:00"))
+                dt_ = dt_.replace(tzinfo=None)
+            else:
+                dt_ = None
+            if dt_:
+                h = (datetime.now() - dt_).total_seconds() / 3600
+                ago = ("방금" if h < 1 else f"{h:.0f}시간 전" if h < 24
+                       else f"{h/24:.0f}일 전")
+        except Exception:
+            pass
+        out.append({"title": title, "source": src, "link": link, "ago": ago})
+        if len(out) >= n:
+            break
+    return out
 
 
 def dday(ts):

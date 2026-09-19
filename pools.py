@@ -138,10 +138,17 @@ def pool_from_wiki(url, col_candidates):
                     pass
                 return out
 
-    # 실패했으면 무엇을 봤는지 알려 준다. 그래야 고칠 수 있다.
-    print(f"  표 {len(tables)}개에서 티커 열을 못 찾음.", end=" ")
-    for i, fl in enumerate(seen_cols[:4]):
-        print(f"[{i}] {', '.join(fl[:6])}", end="  ")
+    # 실패했으면 표를 전부 보여 준다. 그래야 고칠 수 있다.
+    print(f"\n  표 {len(tables)}개에서 티커 열을 못 찾음:")
+    for i, (fl, t) in enumerate(zip(seen_cols, tables)):
+        head = ""
+        try:
+            if len(t):
+                head = " | 첫 줄: " + ", ".join(
+                    str(x)[:14] for x in list(t.iloc[0])[:4])
+        except Exception:
+            pass
+        print(f"    [{i:>2}] {len(t):>4}행  {', '.join(fl[:5])}{head}")
     return []
 
 
@@ -199,8 +206,14 @@ INDEX_SOURCES = {
               {"Symbol", "Ticker"}, "S&P 400 (중형주)"),
     "sp600": ("https://en.wikipedia.org/wiki/List_of_S%26P_600_companies",
               {"Symbol", "Ticker"}, "S&P 600 (소형주)"),
-    "nasdaq100": ("https://en.wikipedia.org/wiki/Nasdaq-100",
+    # ★ 2026-09 확인: 위키피디아가 Nasdaq-100 문서에서 종목 표를 빼고
+    #   별도 문서(List_of_NASDAQ-100_companies)로 옮겼다.
+    #   옛 주소를 보던 코드는 지수 기록 표만 18개 읽고 실패했다.
+    "nasdaq100": ("https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies",
                   {"Ticker", "Symbol"}, "나스닥 100"),
+    # 위키피디아가 아니라 나스닥 공개 목록에서 받는다 (fetch_index 에서 갈라짐)
+    "nasdaqall": (None, None, "나스닥 전체 상장사"),
+    "nyseall": (None, None, "NYSE·AMEX 전체 상장사"),
 }
 
 
@@ -208,6 +221,10 @@ def fetch_index(key):
     """지수 편입 종목 리스트. 실패하면 빈 리스트."""
     if key not in INDEX_SOURCES:
         return []
+    if key == "nasdaqall":
+        return fetch_all_listed("nasdaq")
+    if key == "nyseall":
+        return fetch_all_listed("nyse")
     url, cols, _ = INDEX_SOURCES[key]
     return pool_from_wiki(url, cols)
 
@@ -229,3 +246,81 @@ def get_pool(name):
         print("  코스닥은 티커에 .KQ 를 붙여 tickers.txt 로 넣어 쓰는 걸 권장.")
         return []
     return DEFAULT
+
+# ─────────────────────────────────────────────────────────────
+# 나스닥 전체 상장사 (3,000개 이상)
+#
+#   나스닥이 공개하는 목록 파일을 그대로 받는다.
+#   지수(나스닥100)는 그중 큰 것 100개뿐이라, 지수 밖 소형주까지
+#   보려면 이 목록이 필요하다.
+#
+#   ★ 알고 쓸 것
+#     대부분이 시총 1천억 미만이다. 업종 확인에만 1시간 반,
+#     scan 은 4시간쯤 걸린다.
+#     ETF·우선주·워런트는 걸러 낸다.
+# ─────────────────────────────────────────────────────────────
+
+NASDAQ_LIST_URL = (
+    "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt")
+NYSE_LIST_URL = (
+    "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt")
+
+
+def fetch_all_listed(which="nasdaq"):
+    """나스닥(또는 NYSE 등) 전체 상장 종목.
+
+    파일 형식: 파이프(|)로 나뉜 텍스트. 첫 줄이 머리글, 마지막 줄이 파일 안내.
+    """
+    import json
+    import os
+    import time
+    import urllib.request
+    url = NASDAQ_LIST_URL if which == "nasdaq" else NYSE_LIST_URL
+    p = _wiki_cache_path(url)
+    if os.path.exists(p) and time.time() - os.path.getmtime(p) < WIKI_TTL:
+        try:
+            with open(p, encoding="utf-8") as f:
+                cached = json.load(f)
+            if cached:
+                print(f"  (저장된 목록 사용, {len(cached)}개)", end=" ")
+                return cached
+        except Exception:
+            pass
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            text = r.read().decode("utf-8", "replace")
+    except Exception as e:
+        print(f"  받기 실패: {e}")
+        return []
+
+    lines = [l for l in text.splitlines() if l.strip()]
+    if len(lines) < 10:
+        return []
+    head = [h.strip() for h in lines[0].split("|")]
+    out = []
+    for l in lines[1:]:
+        if l.startswith("File Creation Time"):
+            break
+        parts = [x.strip() for x in l.split("|")]
+        if len(parts) != len(head):
+            continue
+        row = dict(zip(head, parts))
+        sym = row.get("Symbol") or row.get("ACT Symbol") or ""
+        # ETF·테스트종목 제외
+        if row.get("ETF") == "Y" or row.get("Test Issue") == "Y":
+            continue
+        # 우선주·워런트·유닛은 티커에 특수문자가 붙는다
+        if not sym or not sym.replace("-", "").isalpha():
+            continue
+        if len(sym) > 5:              # 5글자 초과는 우선주·워런트가 대부분
+            continue
+        out.append(sym)
+    out = sorted(set(out))
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(out, f)
+    except Exception:
+        pass
+    return out
+
