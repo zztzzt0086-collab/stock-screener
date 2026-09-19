@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-19 02:33"
+BUILD = "2026-09-19 11:07"
 
 SCORE_VERSION = 2
 
@@ -213,7 +213,38 @@ DAMO_MAX = {"ROIC 초과수익": 35, "재투자 효율": 25, "이익률 추세(�
 DAMO_WACC = 9.0          # 자본비용 기본 가정 %
 
 
+
+def _numify(d, keys):
+    """숫자여야 하는 값을 숫자로 바꾼다. 못 바꾸면 None.
+
+    ★ 야후가 숫자 자리에 글자를 주는 종목이 있다.
+      옛 snapshot.json 을 읽을 때도 같은 일이 생긴다.
+      채점 함수 앞에서 한 번 걸러 둔다.
+    """
+    for k in keys:
+        v = d.get(k)
+        if v is None or isinstance(v, (int, float)):
+            continue
+        try:
+            d[k] = float(str(v).replace(",", "").strip())
+        except Exception:
+            d[k] = None
+    return d
+
+
+# 채점 함수가 숫자로 쓰는 키 전부.
+#   debt_asof · roic_note · reinv_note · netcash_note 는 원래 글자라 뺀다.
+_SCORE_NUMKEYS = ("mcap_krw", "margin", "debt", "insider", "roe", "per",
+                  "peg", "growth", "cagr", "rev1y", "px1y", "dd", "rnd",
+                  "dilution", "dil_annual", "netcash", "mcap_fin", "ocf",
+                  "ni", "dy", "div_yrs", "roic", "reinv_eff", "fcf",
+                  "debt_yf", "inst", "tgt", "short_pct",
+                  "bvps_chg", "capex_chg", "capex_last", "cover",
+                  "debt_chg", "fcf_last", "ocf_last")
+
+
 def score_ten(d):
+    _numify(d, _SCORE_NUMKEYS)
     o = []
     m = d["mcap_krw"]
     if m:
@@ -422,6 +453,7 @@ def score_ten(d):
 
 
 def score_lt(d):
+    _numify(d, _SCORE_NUMKEYS)
     import statistics as stx
     o = []
     f = d["fcfs"]
@@ -1088,7 +1120,7 @@ def value_verdict(d, px_hist=None, g_implied=None):
             g2, _, _ = implied_growth(d, margin=nm_ / 100)
             if g2 is not None:
                 g_implied = g2
-                reasons.append(f"역산에 정상화 이익률 {nm_:.0f}% 를 썼다")
+                reasons.append(f"과거 4년 평균 이익률 {nm_:.0f}% 로 다시 계산했다")
         except Exception:
             pass
 
@@ -1097,33 +1129,43 @@ def value_verdict(d, px_hist=None, g_implied=None):
         gap = g_implied * 100 - cagr      # 양수면 기대가 과거보다 높다
         if gap < 0:
             cheap += 1
-            reasons.append(f"기대 성장률이 과거 CAGR 보다 {abs(gap):.0f}%p 낮다")
+            reasons.append(f"바라는 성장률이 실제로 커 온 속도보다 {abs(gap):.0f}%p 낮다")
         else:
             rich += 1
-            reasons.append(f"기대 성장률이 과거 CAGR 보다 {gap:.0f}%p 높다")
+            reasons.append(f"바라는 성장률이 실제로 커 온 속도보다 {gap:.0f}%p 높다")
 
     # ② 자기 이력 밴드
     bp = vb.get("band_pct")
     if bp is not None:
         if bp <= 30:
             cheap += 1
-            reasons.append(f"자기 이력 {bp:.0f} 백분위 — 싼 쪽 ({vb['basis']})")
+            reasons.append(f"이 회사 과거 중 {bp:.0f}번째 — 싼 쪽 ({vb['basis']})")
         elif bp >= 70:
             rich += 1
-            reasons.append(f"자기 이력 {bp:.0f} 백분위 — 비싼 쪽 ({vb['basis']})")
+            reasons.append(f"이 회사 과거 중 {bp:.0f}번째 — 비싼 쪽 ({vb['basis']})")
         else:
-            reasons.append(f"자기 이력 {bp:.0f} 백분위 — 중간 ({vb['basis']})")
+            reasons.append(f"이 회사 과거 중 {bp:.0f}번째 — 중간 ({vb['basis']})")
 
+    # ★ 두 가지를 다 못 봤으면 판단하지 않는다.
+    #   전에는 거꾸로 계산 하나만으로 "고평가" 라고 했다.
+    #   견줄 과거가 없는데 비싸다고 하는 건 근거가 부족하다.
+    n_signal = (1 if gap is not None else 0) + (1 if bp is not None else 0)
     if cheap and rich:
         label = "모름"
-        reasons.append("두 신호가 서로 반대다")
+        reasons.append("두 가지가 서로 반대로 나왔다")
+    elif n_signal < 2:
+        label = "모름"
+        if bp is None:
+            reasons.append("견줄 과거 자료가 없어 한쪽만 봤다")
+        else:
+            reasons.append("따져 볼 게 하나뿐이다")
     elif cheap >= 1 and rich == 0:
         label = "저평가 쪽"
     elif rich >= 1 and cheap == 0:
         label = "고평가 쪽"
     else:
         label = "모름"
-        reasons.append("판단할 재료가 없다")
+        reasons.append("따져 볼 게 없다")
 
     # 경계 후보를 여러 개 같이 남긴다 (나중에 어느 것이 맞았는지 보려고)
     cand = {}
@@ -1136,6 +1178,10 @@ def value_verdict(d, px_hist=None, g_implied=None):
             cand[f"gap_over{th}"] = gap > th
 
     return {"label": label, "reasons": reasons,
+            # 화면이 같은 값을 쓰도록 실제 쓴 것을 돌려준다.
+            # 화면이 따로 계산하면 "30%p 높다" 와 "23%p 낮다" 가 같이 나온다.
+            "implied_g": g_implied,
+            "used_margin": nm_,
             "band_pct": bp, "band_n": vb.get("band_n"),
             "basis": vb.get("basis"), "norm_margin": vb.get("norm_margin"),
             "norm_per": vb.get("norm_per"), "cur_per": vb.get("cur_per"),
@@ -1697,7 +1743,24 @@ def fetch(t):
     except Exception:
         pass
 
-    return {
+    # ★ 야후가 숫자 자리에 글자를 주는 종목이 있다.
+    #   1,004개로 넓히니 ZSQR 에서 per 이 문자열로 와서
+    #   "'>' not supported between 'str' and 'int'" 로 터졌다.
+    #   돌려주기 전에 숫자여야 하는 값을 전부 숫자로 만든다.
+    def _n(v):
+        if v is None or isinstance(v, bool):
+            return None
+        if isinstance(v, (int, float)):
+            try:
+                return None if pd.isna(v) else float(v)
+            except Exception:
+                return float(v)
+        try:
+            return float(str(v).replace(",", "").strip())
+        except Exception:
+            return None
+
+    _out = {
         "ticker": t.upper(),
         "name": info.get("shortName") or info.get("longName"),
         "sector": info.get("sector"),
@@ -1739,6 +1802,17 @@ def fetch(t):
         "short_pct": pct(info.get("shortPercentOfFloat")),
         "earnings": info.get("earningsTimestamp"),
     }
+
+    # 숫자여야 하는 값
+    for _k in ("price", "chg", "mcap", "mcap_krw", "mcap_fin", "mcap_raw",
+               "margin", "debt", "debt_chg", "debt_yf", "insider", "inst",
+               "roe", "per", "peg", "growth", "cagr", "rev1y", "px1y", "dd",
+               "dilution", "dil_annual", "rnd", "dy", "netcash", "ocf", "ni",
+               "roic", "reinv_eff", "tgt", "short_pct", "fcf", "beta",
+               "div_yrs", "n_analyst", "shares", "earnings"):
+        if _k in _out:
+            _out[_k] = _n(_out[_k])
+    return _out
 
 
 def money(v, cur="USD"):
@@ -2075,8 +2149,12 @@ def footprint_from(h):
     # 3) OBV 다이버전스 (20일)
     sign = ret.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
     obv = (v * sign).cumsum()
-    obv_chg = float((obv.iloc[-1] - obv.iloc[-21]) / (v20.iloc[-1] * 20))
-    px_chg = float(c.iloc[-1] / c.iloc[-21] - 1)
+    # 거래가 거의 없는 종목은 20일 평균 거래량이 0 이라 나누기가 터진다.
+    # 1,004개로 넓히니 그런 종목이 나왔다.
+    _den = float(v20.iloc[-1]) * 20 if v20.iloc[-1] else 0.0
+    obv_chg = (float(obv.iloc[-1] - obv.iloc[-21]) / _den) if _den else 0.0
+    _c21 = float(c.iloc[-21]) if c.iloc[-21] else 0.0
+    px_chg = (float(c.iloc[-1]) / _c21 - 1) if _c21 else 0.0
     diverge = obv_chg > 0.15 and px_chg < 0.03      # 가격 횡보 + OBV↑ = 조용한 매수 누적
     distrib = obv_chg < -0.15 and px_chg > -0.03    # 가격 버팀 + OBV↓ = 조용한 매도 누적
 

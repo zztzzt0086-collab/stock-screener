@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-19 02:33"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-19 11:07"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -895,28 +895,39 @@ def detail(d, band=None, buy=None):
         g_, m_, note_ = implied_growth(d)
     except Exception:
         g_ = m_ = note_ = None
-    if g_ is not None:
-        vrows.append(("지금 주가가 기대하는 성장률",
-                      f"연 {g_*100:.0f}%  (10년, 목표 이익률 {m_*100:.0f}% 가정)"))
-        if d.get("cagr") is not None:
-            gap = d["cagr"] - g_ * 100
-            word = (f"기대치보다 {abs(gap):.0f}%p 낮다" if gap < 0
-                    else f"기대치보다 {gap:.0f}%p 높다")
-            vrows.append(("실제 장기 CAGR", f"{d['cagr']:.1f}%  ·  {word}"))
-    elif note_:
-        vrows.append(("역산", note_))
 
-    # 밸류 판정 (저평가 / 적정 / 고평가 / 모름)
-    #   ★ 아직 검증 안 됐다. 화면에 그렇게 적는다.
-    #     2026-09-19 valstat: 209종목 중 154개(74%)가 "고평가 쪽".
-    #     한쪽으로 몰리는 것은 (가) 지금이 실제로 비싼 구간이거나
-    #     (나) 밴드 표본이 4개뿐이라 그렇다. 아직 못 가렸다.
+    # ★ 아래 표와 판정이 같은 값을 쓰게 한다.
+    #   전에는 화면이 따로 계산해서 "30%p 높다" 와 "23%p 낮다" 가
+    #   같은 화면에 같이 나왔다.
     vv = None
     try:
         vv = value_verdict(d, year_end_prices(d["ticker"]),
                            g_ if g_ is not None else None)
     except Exception:
         pass
+
+    g_use = (vv or {}).get("implied_g", g_)
+    m_use = (vv or {}).get("used_margin")
+    m_use = (m_use / 100) if m_use is not None else m_
+    if vv and vv.get("norm_per") is not None:
+        vrows.append(("과거 4년 평균 이익률로 다시 본 PER",
+                      f"{vv['norm_per']:.1f}"))
+    if g_use is not None:
+        vrows.append(("이 주가가 말이 되려면",
+                      f"10년간 매년 {g_use*100:.0f}% 씩 커야 함"
+                      + (f"  (이익률 {m_use*100:.0f}% 로 잡고)"
+                         if m_use else "")))
+        if d.get("cagr") is not None:
+            gap = g_use * 100 - d["cagr"]
+            word = (f"바라는 것보다 {gap:.0f}%p 느림" if gap > 0
+                    else f"바라는 것보다 {abs(gap):.0f}%p 빠름")
+            vrows.append(("실제로 커 온 속도",
+                          f"매년 {d['cagr']:.1f}%  ·  {word}"))
+    elif note_:
+        vrows.append(("계산 못 함", note_))
+    if vv and vv.get("band_pct") is not None:
+        vrows.append((f"이 회사 과거와 견주면 ({vv.get('basis')})",
+                      f"{vv['band_pct']:.0f}번째 (100이 제일 비쌈)"))
 
     if vrows:
         st.markdown('<div class="sect">이 값이 싼지 비싼지</div>',
