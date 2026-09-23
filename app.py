@@ -47,12 +47,21 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-23 11:20"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-23 22:20"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
 st.markdown(f"""<style>
 #MainMenu, footer, header {{visibility:hidden;}}
+/* ★ 폰이 다크 모드여도 앱은 항상 밝게. 글씨 색이 밝은 바탕 기준이라
+      어두운 바탕에선 검정 위 검정이 되어 안 보였다. */
+.stApp {{background-color:#FFFFFF !important;}}
+.stApp, .stApp p, .stApp li, .stApp label, .stApp span, .stApp div {{color:#2F3437;}}
+.stApp input, .stApp textarea {{background:#FFFFFF !important; color:#2F3437 !important;
+                               border:1px solid #D1D5DB !important;}}
+.stApp [data-baseweb="tab"] p {{color:#2F3437 !important;}}
+.stApp button {{background:#FFFFFF; color:#2F3437; border:1px solid #D1D5DB;}}
+.stApp [data-testid="stExpander"] {{background:#FFFFFF;}}
 .block-container {{padding:1rem 1rem 3rem;max-width:720px;}}
 h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 .card {{background:#fff;border:1px solid #E4E4E7;border-radius:10px;
@@ -293,7 +302,7 @@ def yearly_svg(ys, idx):
         pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in
                        (pt(i, R * best[i] / 100) for i in range(n)))
         parts.append(f'<polygon points="{pts}" fill="#94A3B8" '
-                     f'fill-opacity="0.38" stroke=MUTED stroke-width="1"/>')
+                     f'fill-opacity="0.38" stroke="{MUTED}" stroke-width="1"/>')
 
     # 앞 = 선택 연도
     if all(v is not None for v in cur):
@@ -316,7 +325,7 @@ def yearly_svg(ys, idx):
             anchor = "start"
         v = ys["raw"][lab][idx]
         parts.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="10" '
-                     f'fill=MUTED text-anchor="{anchor}">{lab}</text>')
+                     f'fill="{MUTED}" text-anchor="{anchor}">{lab}</text>')
         parts.append(f'<text x="{x:.1f}" y="{y + 12:.1f}" font-size="11" '
                      f'font-weight="700" fill="{CHARCOAL}" '
                      f'text-anchor="{anchor}">'
@@ -553,7 +562,7 @@ def price_chart(t, currency="USD"):
                      f'y2="{yy:.1f}" stroke="#CBD5E1" stroke-width="1"/>')
         fmt = f"{v:,.0f}" if currency == "KRW" else f"{v:,.1f}"
         parts.append(f'<text x="{PAD_L+iw+6:.1f}" y="{yy+3.5:.1f}" font-size="9" '
-                     f'fill=MUTED>{fmt}</text>')
+                     f'fill="{MUTED}">{fmt}</text>')
 
     # 캔들
     for i, r in enumerate(rows):
@@ -567,8 +576,8 @@ def price_chart(t, currency="USD"):
                      f'height="{hgt:.1f}" fill="{col}"/>')
 
     # 이동평균선
-    for key, col, wdt in (("ma20", ORANGE, 1.3), ("ma50", MUTED, 1.1),
-                          ("ma120", "#3F4956", 1.1)):
+    for key, col, wdt in (("ma20", ORANGE, 1.4), ("ma50", "#0D9488", 1.3),
+                          ("ma120", "#A16207", 1.3)):
         pts = [f"{x(i):.1f},{y(r[key]):.1f}" for i, r in enumerate(rows)
                if r.get(key)]
         if len(pts) > 2:
@@ -581,36 +590,52 @@ def price_chart(t, currency="USD"):
     #   보라 ▼ = 사지 마라 쪽 (캔들 위)
     #   빨강/파랑은 이미 상승/하락이라 신호 색은 따로 쓴다.
     SIG_UP, SIG_DN = "#16A34A", "#7C3AED"
+    EDGE = {"+": "#FFFFFF", "−": "#FFFFFF"}      # 화살표 테두리
+    LINE = {"+": "#16A34A", "−": "#7C3AED"}      # 그날 점선
     try:
         marks = signal_marks(rows)
     except Exception:
         marks = []
+    # ★ 폰에서는 차트가 절반쯤으로 줄어든다. 작게 그리면 점처럼 보인다.
+    #   그래서 크게 그리고, 그날 위치에 옅은 세로선을 같이 긋는다.
+    AW, AH = 9.0, 13.0                           # 화살표 반폭 · 높이 (차트 단위)
+    y_top, y_bot = PAD_T + 2, PAD_T + ih - 2      # 그림 영역 안에서만
     for mk in marks:
         i = mk["i"]
         if i >= n:
             continue
         xx = x(i)
+        col = SIG_UP if mk["dir"] == "+" else SIG_DN
+        dk = "+" if mk["dir"] == "+" else "−"
+        # 그날 세로선 (어느 날인지 눈에 띄게)
+        parts.append(f'<line x1="{xx:.1f}" y1="{PAD_T}" x2="{xx:.1f}" '
+                     f'y2="{PAD_T + ih}" stroke="{LINE[dk]}" stroke-width="1" '
+                     f'stroke-dasharray="3,3" opacity="0.55"/>')
         if mk["dir"] == "+":
-            yy = y(rows[i]["low"]) + 7          # 캔들 아래
-            pts = f"{xx:.1f},{yy-5:.1f} {xx-3.5:.1f},{yy:.1f} {xx+3.5:.1f},{yy:.1f}"
-            col = SIG_UP
+            tip = min(y(rows[i]["low"]) + 4, y_bot - AH)     # 캔들 아래
+            base = tip + AH
+            pts = (f"{xx:.1f},{tip:.1f} {xx-AW:.1f},{base:.1f} "
+                   f"{xx+AW:.1f},{base:.1f}")
         else:
-            yy = y(rows[i]["high"]) - 7         # 캔들 위
-            pts = f"{xx:.1f},{yy+5:.1f} {xx-3.5:.1f},{yy:.1f} {xx+3.5:.1f},{yy:.1f}"
-            col = SIG_DN
-        parts.append(f'<polygon points="{pts}" fill="{col}" opacity="0.9">'
+            tip = max(y(rows[i]["high"]) - 4, y_top + AH)    # 캔들 위
+            base = tip - AH
+            pts = (f"{xx:.1f},{tip:.1f} {xx-AW:.1f},{base:.1f} "
+                   f"{xx+AW:.1f},{base:.1f}")
+        parts.append(f'<polygon points="{pts}" fill="{col}" stroke="{EDGE[dk]}" '
+                     f'stroke-width="1.4">'
                      f'<title>{rows[i]["date"]} · {mk["label"]}</title></polygon>')
 
     # 날짜 라벨 (양 끝 + 가운데)
     for i in (0, n // 2, n - 1):
         anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
         parts.append(f'<text x="{x(i):.1f}" y="{H-4}" font-size="9" '
-                     f'fill=MUTED text-anchor="{anchor}">'
+                     f'fill="{MUTED}" text-anchor="{anchor}">'
                      f'{rows[i]["date"][2:].replace("-", ".")}</text>')
 
     st.markdown('<div class="sect">주가 흐름 (1년)</div>', unsafe_allow_html=True)
     st.markdown(
-        f'<div style="margin:2px 0 6px"><svg viewBox="0 0 {W} {H}" width="100%">'
+        f'<div style="margin:2px 0 6px;background:#FFFFFF;border-radius:8px;'
+        f'padding:4px 2px"><svg viewBox="0 0 {W} {H}" width="100%">'
         + "".join(parts) + "</svg></div>", unsafe_allow_html=True)
 
     # 기간별 수익률
@@ -631,12 +656,31 @@ def price_chart(t, currency="USD"):
             f'</div>')
     st.markdown(f'<div style="display:flex;gap:2px;margin-bottom:6px">'
                 + "".join(cells) + "</div>", unsafe_allow_html=True)
-    _legend = ('주황 20일선 · 회색 50일선 · 진회색 120일선 · '
-               '빨강 상승 · 파랑 하락')
+    _legend = ('<b style="color:#EA580C">━</b> 20일선 · '
+               '<b style="color:#0D9488">━</b> 50일선 · '
+               '<b style="color:#A16207">━</b> 120일선 · '
+               '<b style="color:#DC2626">■</b> 상승 · '
+               '<b style="color:#2563EB">■</b> 하락')
     if marks:
-        _legend += ('<br><b style="color:#16A34A">▲</b> 사도 됨 쪽 · '
-                    '<b style="color:#7C3AED">▼</b> 사지 마라 쪽 '
-                    '(검증 통과한 규칙만. 화살표에 마우스를 올리면 날짜와 규칙이 나옵니다)')
+        if any(not m.get("verified", True) for m in marks):
+            _legend += ('<br><b style="color:#16A34A">▲</b> RSI 30 아래로 내려간 날 '
+                        '<span style="color:#B45309">(검증 미통과 · 참고용)</span> '
+                        '— 캔들 아래에 찍히고 점선이 그날이다')
+        else:
+            _legend += ('<br><b style="color:#16A34A">▲</b> 사도 됨 쪽 · '
+                        '<b style="color:#7C3AED">▼</b> 사지 마라 쪽 '
+                        '— 캔들 아래(▲)·위(▼)에 찍히고 점선이 그날이다')
+        # 어디 찍혔는지 날짜로도 적는다 (최근 순 6개)
+        _days = []
+        for mk in sorted(marks, key=lambda m: -m["i"])[:6]:
+            _c = "#16A34A" if mk["dir"] == "+" else "#7C3AED"
+            _a = "▲" if mk["dir"] == "+" else "▼"
+            _days.append(f'<b style="color:{_c}">{_a}</b> {rows[mk["i"]]["date"]} '
+                         f'{mk["label"]}')
+        _legend += '<br>' + ' · '.join(_days)
+    else:
+        if SIGNALS:
+            _legend += '<br>최근 1년 안에 신호가 뜬 날이 없다 (화살표 없음이 정상)' 
     st.markdown(f'<p class="note">{_legend}</p>', unsafe_allow_html=True)
 
     # ── 신호 ──
@@ -651,9 +695,9 @@ def price_chart(t, currency="USD"):
         st.markdown('<div class="sect">신호</div>', unsafe_allow_html=True)
         out_s = []
         for g in sigs:
-            mark = "●" if g["on"] else "○"
+            mark = "▲ 지금 켜짐 —" if g["on"] else "지금 꺼짐 —"
             if g["on"]:
-                col = "#16A34A" if g["dir"] == "+" else "#DC2626"
+                col = "#16A34A" if g["dir"] == "+" else "#7C3AED"
             else:
                 col = MUTED
             meta = []
@@ -665,10 +709,14 @@ def price_chart(t, currency="USD"):
                 meta.append(g["extra"])
             if g.get("note"):
                 meta.append(g["note"])
+            tag = ('' if g.get("verified", True) else
+                   ' <span style="font-size:.66rem;font-weight:600;color:#B45309;'
+                   'border:1px solid #B45309;border-radius:4px;padding:0 4px">'
+                   '검증 미통과 · 참고</span>')
             out_s.append(
                 f'<div style="padding:6px 0;border-bottom:1px solid #F1F1F2">'
                 f'<div style="font-size:.82rem;color:{col};font-weight:600">'
-                f'{mark} {g["label"]}'
+                f'{mark} {g["label"]}{tag}'
                 + ('  <span style="font-size:.66rem;font-weight:400">'
                    '사지 마라 쪽</span>' if g["dir"] == "−" else "")
                 + f'</div>'
@@ -678,8 +726,8 @@ def price_chart(t, currency="USD"):
                    f'※ {g["caveat"]}</div>' if g.get("caveat") else "")
                 + '</div>')
         st.markdown("".join(out_s), unsafe_allow_html=True)
-        st.markdown('<p class="note">● 켜짐 · ○ 꺼짐. '
-                    '백테스트를 통과한 규칙만 나옵니다. '
+        st.markdown('<p class="note">"지금 켜짐" 이면 오늘 그 조건이 맞다는 뜻. '
+                    '"검증 미통과" 표시가 붙은 것은 백테스트를 못 넘은 참고용입니다. '
                     '대조군(아무 날 매수) 대비 수치이고, 점수에는 안 들어갑니다.</p>',
                     unsafe_allow_html=True)
 
@@ -785,7 +833,7 @@ def radar_svg(items, mx, mode, center_score, center_col, axes=None):
             ly -= 6
         num = f"{v:.0f}" if v is not None else "-"
         labs += (f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="middle" '
-                 f'font-size="11" fill=MUTED>{label}</text>'
+                 f'font-size="11" fill="{MUTED}">{label}</text>'
                  f'<text x="{lx:.1f}" y="{ly + 15:.1f}" text-anchor="middle" '
                  f'font-size="13" font-weight="700" fill="{CHARCOAL}">{num}</text>')
 
