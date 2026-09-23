@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-23 22:29"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-23 22:44"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -605,6 +605,13 @@ def price_chart(t, currency="USD"):
         if i >= n:
             continue
         xx = x(i)
+        # 노란 점 (RSI 50 돌파 같은 '표시만' 하는 것) — 그날 종가 자리에
+        if mk.get("shape") == "dot":
+            yy = y(rows[i]["close"])
+            parts.append(f'<circle cx="{xx:.1f}" cy="{yy:.1f}" r="5.5" '
+                         f'fill="#FACC15" stroke="#854D0E" stroke-width="1.6">'
+                         f'<title>{rows[i]["date"]} · {mk["label"]}</title></circle>')
+            continue
         col = SIG_UP if mk["dir"] == "+" else SIG_DN
         dk = "+" if mk["dir"] == "+" else "−"
         # 그날 세로선 (어느 날인지 눈에 띄게)
@@ -669,8 +676,11 @@ def price_chart(t, currency="USD"):
                 continue
             _seen.add(mk["key"])
             _up = mk["dir"] == "+"
-            _c = "#16A34A" if _up else "#7C3AED"
-            _a = "▲" if _up else "▼"
+            if mk.get("shape") == "dot":
+                _c, _a = "#CA8A04", "●"
+            else:
+                _c = "#16A34A" if _up else "#7C3AED"
+                _a = "▲" if _up else "▼"
             if not mk.get("tested", True):
                 _st = ' <span style="color:#B45309">(아직 검증 안 함 · 참고)</span>'
             elif not mk.get("verified", True):
@@ -679,12 +689,16 @@ def price_chart(t, currency="USD"):
                 _st = " (검증 통과)"
             _items.append(f'<b style="color:{_c}">{_a}</b> {mk["label"]}{_st}')
         _legend += ('<br>' + ' · '.join(_items)
-                    + '<br>▲ 는 캔들 아래, ▼ 는 캔들 위에 찍히고 점선이 그날이다')
+                    + '<br>▲ 는 캔들 아래, ▼ 는 캔들 위에 찍히고 점선이 그날이다. '
+                      '● 는 그날 종가 자리')
         # 어디 찍혔는지 날짜로도 적는다 (최근 순 6개)
         _days = []
         for mk in sorted(marks, key=lambda m: -m["i"])[:6]:
-            _c = "#16A34A" if mk["dir"] == "+" else "#7C3AED"
-            _a = "▲" if mk["dir"] == "+" else "▼"
+            if mk.get("shape") == "dot":
+                _c, _a = "#CA8A04", "●"
+            else:
+                _c = "#16A34A" if mk["dir"] == "+" else "#7C3AED"
+                _a = "▲" if mk["dir"] == "+" else "▼"
             _days.append(f'<b style="color:{_c}">{_a}</b> {rows[mk["i"]]["date"]} '
                          f'{mk["label"]}')
         _legend += '<br>' + ' · '.join(_days)
@@ -705,9 +719,11 @@ def price_chart(t, currency="USD"):
         st.markdown('<div class="sect">신호</div>', unsafe_allow_html=True)
         out_s = []
         for g in sigs:
-            mark = "▲ 지금 켜짐 —" if g["on"] else "지금 꺼짐 —"
+            _sym = ("●" if g.get("dir") == "0" else "▲" if g.get("dir") == "+" else "▼")
+            mark = f"{_sym} 지금 켜짐 —" if g["on"] else "지금 꺼짐 —"
             if g["on"]:
-                col = "#16A34A" if g["dir"] == "+" else "#7C3AED"
+                col = ("#16A34A" if g["dir"] == "+" else
+                       "#CA8A04" if g["dir"] == "0" else "#7C3AED")
             else:
                 col = MUTED
             meta = []
