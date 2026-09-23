@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-23 10:07"
+BUILD = "2026-09-23 20:49"
 
 SCORE_VERSION = 2
 
@@ -2362,8 +2362,8 @@ def chart_data(t, period="1y"):
 # ═════════════════════════════════════════════════════════════
 # 가격 신호
 #
-#   ★ 검증을 통과한 규칙만 여기에 적는다. 화면은 이 표에 있는 것만 보여 준다.
-#     지금은 비어 있다. sigtest 결과가 나오기 전엔 화면에 아무것도 안 나온다.
+#   ★ 화면은 이 표에 있는 규칙만 보여 준다. 없으면 아무것도 안 그린다.
+#     원칙은 "sigtest 통과한 것만" 이다. 예외로 켠 것은 아래에 이유를 적는다.
 #
 #   통과 기준 (2026-09-23 에 미리 정해 둔 것)
 #     · 대조군 Z(아무 날 매수) 를 연도별로 뺀 값으로 판정
@@ -2372,20 +2372,57 @@ def chart_data(t, period="1y"):
 #     · 21일·63일 둘 다 같은 방향으로 통과
 #
 #   채우는 법 (sigtest 결과를 그대로 옮긴다)
-#     SIGNALS = {
-#         "B": {"label": "120일선 위 · 상승 중",
-#               "dir": "+",          # + 사도 됨 / − 사지 마라
-#               "vsz": 4.2,          # Z 대비 %p (63일)
-#               "years": "9/11",     # 부호가 맞은 연도
-#               "hold": 63},
-#     }
-SIGNALS = {}
+#     "키": {"label", "dir"(+ 또는 −), "vsz"(Z대비 %p), "years", "hold",
+#            "extra"(다른 보유기간 등), "caveat"(주의 문구)}
+SIGNALS = {
+    # ★ 기준: 나스닥100 (univ_nas.txt · 101종목 · 15년 · 벤치 QQQ · 2026-09-23)
+    #   63일  Z대비 +4.6%p · 13/15년 +   중앙 +2.9 · 이긴 56% (Z 49%)   통과(+)
+    #   21일  Z대비 +1.1%p · 13/15년 +   중앙 +1.0 · 이긴 58%           보류 (크기 미달)
+    #   → "둘 다 통과" 기준으로는 최종 없음. 3개월 보유 신호로만 켠다 (굥 결정).
+    #
+    #   같은 규칙, 다른 목록 (전부 같은 방향 +, 반대로 나온 적 없음)
+    #     1,004종목     63일 +7.6%p · 12/15년   통과 (21일도 통과) · 중앙값 −4.3
+    #     93종목        63일 +2.9%p · 11/14년   문턱 살짝 미달
+    #     굥 고른 21개   63일 +3.0%p · 4/4년     표본부족
+    #   같은 표에서 F(볼린저 하단)도 63일만 통과 — E 와 같은 "많이 빠졌을 때" 신호라
+    #   따로 켜지 않았다.
+    "E": {"label": "RSI 30 아래",
+          "dir": "+",
+          "vsz": 4.6, "years": "13/15", "hold": 63,
+          "extra": "21일 +1.1%p (13/15년, 크기 미달) · 이긴 비율 56% (대조군 49%)",
+          "caveat": "나스닥100 기준. 3개월 들고 있을 때만 대조군을 확실히 이겼고, "
+                    "한 달 안에는 차이가 작다. 오늘 편입된 종목만 봐서 실제보다 "
+                    "좋게 나왔을 수 있다"},
+}
+
+
+def _rsi_list(c, n=14):
+    """Wilder RSI. sigtest.py 와 같은 식이어야 한다.
+    (pandas ewm(alpha=1/n, adjust=False) 를 손으로 푼 것)"""
+    out = [None] * len(c)
+    if len(c) < n + 2:
+        return out
+    a = 1.0 / n
+    au = ad = None
+    for i in range(1, len(c)):
+        d = c[i] - c[i - 1]
+        g, l = (d if d > 0 else 0.0), (-d if d < 0 else 0.0)
+        if au is None:
+            au, ad = g, l
+        else:
+            au = (1 - a) * au + a * g
+            ad = (1 - a) * ad + a * l
+        if ad == 0:
+            out[i] = None
+        else:
+            out[i] = 100 - 100 / (1 + au / ad)
+    return out
 
 
 # 규칙이 "상태"인지 "사건"인지.
 #   상태(state)  = 며칠씩 이어진다 → 차트엔 켜지는 첫날만 찍는다
 #   사건(event)  = 그날 하루 → 그날 찍는다
-RULE_KIND = {"B": "state", "C": "event", "G": "state",
+RULE_KIND = {"B": "state", "C": "event", "E": "state", "G": "state",
              "I": "event", "J": "event"}
 
 
@@ -2407,9 +2444,18 @@ def _rule_series(rows):
             return None
         return sum(xs[i + 1 - k:i + 1]) / k
 
+    rsi = _rsi_list(c) if "E" in SIGNALS else None
+
     out = {}
     for key in SIGNALS:
         ser = [None] * n
+        if key == "E":
+            # RSI 는 앞 50일쯤은 아직 안정되지 않아 쓰지 않는다
+            for i in range(n):
+                if i >= 50 and rsi[i] is not None:
+                    ser[i] = rsi[i] < 30
+            out[key] = ser
+            continue
         for i in range(n):
             try:
                 if key == "B":
@@ -2512,6 +2558,11 @@ def signal_state(rows):
                     hi = max(win)
                     on = c[i] >= hi
                     note = f"52주 고점 {hi:,.2f}"
+            elif k == "E":
+                r_ = _rsi_list(c)[i]
+                if r_ is not None:
+                    on = r_ < 30
+                    note = f"RSI {r_:.0f}"
             elif k == "G":
                 win = c[max(0, i - 251):i + 1]
                 hi = max(win)
@@ -2539,6 +2590,7 @@ def signal_state(rows):
         out.append({"key": k, "label": meta.get("label", k), "on": bool(on),
                     "dir": meta.get("dir", "+"), "vsz": meta.get("vsz"),
                     "years": meta.get("years"), "hold": meta.get("hold"),
+                    "extra": meta.get("extra"), "caveat": meta.get("caveat"),
                     "note": note})
     return out
 

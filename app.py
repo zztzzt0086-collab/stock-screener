@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-23 10:07"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-23 11:20"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -661,6 +661,8 @@ def price_chart(t, currency="USD"):
                 meta.append(f"{g['hold']}일 · 대조군 대비 {g['vsz']:+.1f}%p")
             if g.get("years"):
                 meta.append(f"{g['years']}년")
+            if g.get("extra"):
+                meta.append(g["extra"])
             if g.get("note"):
                 meta.append(g["note"])
             out_s.append(
@@ -671,7 +673,10 @@ def price_chart(t, currency="USD"):
                    '사지 마라 쪽</span>' if g["dir"] == "−" else "")
                 + f'</div>'
                 f'<div style="font-size:.66rem;color:{MUTED};margin-top:2px">'
-                f'{" · ".join(meta)}</div></div>')
+                f'{" · ".join(meta)}</div>'
+                + (f'<div style="font-size:.66rem;color:#B45309;margin-top:2px">'
+                   f'※ {g["caveat"]}</div>' if g.get("caveat") else "")
+                + '</div>')
         st.markdown("".join(out_s), unsafe_allow_html=True)
         st.markdown('<p class="note">● 켜짐 · ○ 꺼짐. '
                     '백테스트를 통과한 규칙만 나옵니다. '
@@ -1184,6 +1189,14 @@ def detail(d, band=None, buy=None):
                 '자동 수집값은 누락·오류가 있을 수 있으니 최종 판단 전 '
                 '실적발표 원문을 확인하세요.</p>', unsafe_allow_html=True)
 
+    # 어느 값이 가정을 쓰는지 한눈에
+    st.markdown(
+        '<p class="note" style="margin-top:14px">'
+        '<b>가정이 들어간 것</b> — ROIC(세율 21%, 야후가 안 줄 때) · 다모다란 관점 · '
+        '이 값이 싼지 비싼지 · 역산 성장률 · DCF(자본비용 9% · 재투자 40% · 영구성장 3%) · '
+        '점수 배점과 경계선<br>'
+        '<b>가정 없이 데이터만</b> — 재무 원본 · 삼각형 세 축 · 주가 · 공시 · 화살표(RSI)'
+        '</p>', unsafe_allow_html=True)
 
 def main():
     stt = load_state()
