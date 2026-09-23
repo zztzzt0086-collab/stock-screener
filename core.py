@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-19 11:07"
+BUILD = "2026-09-21 22:48"
 
 SCORE_VERSION = 2
 
@@ -70,6 +70,15 @@ CACHE_DIR = ".cache"
 # 캐시: streamlit 있으면 st.cache_data, 없으면 파일 캐시
 # ─────────────────────────────────────────────────────────────
 
+def _is_empty(r):
+    """캐시하면 안 되는 '실패' 결과인가."""
+    if r is None:
+        return True
+    if isinstance(r, (list, dict, tuple, str)) and len(r) == 0:
+        return True
+    return False
+
+
 def _file_cache(ttl):
     """CLI 전용 디스크 캐시 데코레이터."""
     def deco(fn):
@@ -82,10 +91,17 @@ def _file_cache(ttl):
             if os.path.exists(p) and time.time() - os.path.getmtime(p) < ttl:
                 try:
                     with open(p, encoding="utf-8") as f:
-                        return json.load(f)
+                        v = json.load(f)
+                    if not _is_empty(v):        # 예전에 저장된 빈 값은 버린다
+                        return v
                 except Exception:
                     pass
             r = fn(*a, **kw)
+            # ★ 실패(빈 값)는 저장하지 않는다.
+            #   야후가 잠깐 막혀 None 을 준 것을 저장하면
+            #   풀린 뒤에도 TTL 동안 계속 "찾을 수 없음" 이 된다.
+            if _is_empty(r):
+                return r
             try:
                 with open(p, "w", encoding="utf-8") as f:
                     json.dump(r, f, ensure_ascii=False, default=str)
@@ -113,8 +129,36 @@ def _in_streamlit():
 if _in_streamlit():
     import streamlit as st
 
+    class _NoCache(Exception):
+        """빈 결과를 캐시에 남기지 않으려고 쓰는 예외."""
+        def __init__(self, v):
+            self.v = v
+
     def cache(ttl):
-        return st.cache_data(ttl=ttl, show_spinner=False)
+        # ★ st.cache_data 는 None 도 그대로 저장한다.
+        #   야후가 잠깐 막혔을 때의 None 이 15분 동안 남아
+        #   앱에서 "데이터를 찾을 수 없습니다" 가 계속 떴다.
+        #   예외는 캐시하지 않으므로, 빈 값이면 예외로 빼낸다.
+        def deco(fn):
+            def inner(*a, **kw):
+                r = fn(*a, **kw)
+                if _is_empty(r):
+                    raise _NoCache(r)
+                return r
+            inner.__name__ = fn.__name__
+            inner.__qualname__ = fn.__qualname__
+            inner.__module__ = fn.__module__
+            cached = st.cache_data(ttl=ttl, show_spinner=False)(inner)
+
+            def outer(*a, **kw):
+                try:
+                    return cached(*a, **kw)
+                except _NoCache as e:
+                    return e.v
+            outer.__name__ = fn.__name__
+            outer.clear = getattr(cached, "clear", lambda: None)
+            return outer
+        return deco
 else:                            # CLI 단독 실행 → 파일 캐시
     cache = _file_cache
 
@@ -1943,6 +1987,16 @@ FILING_KIND = {
     "144":   "대주주 매도 예정 신고",
     "SC 13D/A": "5% 취득 변경 (경영참여)",
     "SC 13G/A": "5% 취득 변경 (단순투자)",
+    "SCHEDULE 13G/A": "5% 이상 보유 변경 (단순투자)",
+    "SCHEDULE 13D/A": "5% 이상 보유 변경 (경영참여)",
+    "SCHEDULE 13G": "5% 이상 보유 (단순투자)",
+    "SCHEDULE 13D": "5% 이상 보유 (경영참여)",
+    "8-K/A": "수시공시 수정본",
+    "10-Q/A": "분기보고서 수정본",
+    "10-K/A": "연간보고서 수정본",
+    "11-K":  "임직원 주식매입제도 보고",
+    "S-8":   "임직원 주식 발행 신고",
+    "25-NSE": "상장 폐지 신고",
     "20-F":  "외국기업 연간보고서",
     "6-K":   "외국기업 수시보고",
 }
@@ -1971,7 +2025,17 @@ def _sec_ticker_map():
 # 뒤로 미는 서류.
 #   임원 매매(Form 3/4/5)와 매도예정(144)은 하루에도 수십 건 올라와
 #   중요한 공시를 밀어낸다. 빼지는 않고 아래로 내린다.
-NOISE_FORMS = {"3", "4", "5", "144"}
+NOISE_FORMS = {"3", "4", "5", "144",
+               "3/A", "4/A", "5/A", "144/A"}
+
+
+def _is_noise(form):
+    """임원 매매·매도예정이면 True. 수정본(/A)도 같이 본다."""
+    f = str(form).strip().upper()
+    if f in NOISE_FORMS:
+        return True
+    base = f.split("/")[0]
+    return base in {"3", "4", "5", "144"}
 
 
 def split_filings(fl):
@@ -1979,8 +2043,8 @@ def split_filings(fl):
 
     돌려주는 값: (중요, 임원매매)
     """
-    main = [x for x in fl if x["form"] not in NOISE_FORMS]
-    insider = [x for x in fl if x["form"] in NOISE_FORMS]
+    main = [x for x in fl if not _is_noise(x["form"])]
+    insider = [x for x in fl if _is_noise(x["form"])]
     return main, insider
 
 
@@ -2028,10 +2092,16 @@ def filings(t, n=10, kinds=None, all_forms=False):
         doc = docs[i] if i < len(docs) else ""
         link = (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
                 f"{acc}/{doc}") if acc and doc else ""
+        _kind = FILING_KIND.get(form)
+        if not _kind:
+            _base = form.split("/")[0]
+            _kind = FILING_KIND.get(_base)
+            if _kind and "/" in form:
+                _kind += " 수정본"
         out.append({
             "form": form,
             "date": dates[i],
-            "kind": FILING_KIND.get(form, ""),
+            "kind": _kind or f"{form} 서류",
             "desc": (descs[i] if i < len(descs) else "") or "",
             "items": (items[i] if i < len(items) else "") or "",
             "link": link,
@@ -2040,8 +2110,8 @@ def filings(t, n=10, kinds=None, all_forms=False):
             break
 
     # 중요 공시를 앞으로, 임원 매매를 뒤로
-    main = [x for x in out if x["form"] not in NOISE_FORMS]
-    insider = [x for x in out if x["form"] in NOISE_FORMS]
+    main = [x for x in out if not _is_noise(x["form"])]
+    insider = [x for x in out if _is_noise(x["form"])]
     if kinds or all_forms:
         return out[:n]
     # 중요한 것 n 건 + 임원 매매 몇 건

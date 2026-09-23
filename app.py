@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-19 11:37"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-21 22:48"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -782,6 +782,24 @@ def card(d, mode, band=None, buy=None):
     except Exception:
         pass
 
+    # 실적발표 D-day. 가까울 때만 보여 준다.
+    #   야후가 날짜를 안 주는 종목도 있다 (몇 달 뒤면 확정 전이라 안 준다).
+    eline = ""
+    try:
+        _e, _dd = dday(d.get("earnings"))
+        if _e and _dd is not None and -7 <= _dd <= 45:
+            _c = ("#DC2626" if _dd <= 7 else
+                  ORANGE if _dd <= 21 else CHARCOAL)
+            _w = ("오늘" if _dd == 0 else
+                  f"D-{_dd}" if _dd > 0 else f"{-_dd}일 전")
+            eline = (f'<div class="bandline">'
+                     f'<span style="color:{MUTED}">실적발표 '
+                     f'{_e:%m-%d}</span>'
+                     f'<span style="color:{_c};font-weight:700">{_w}</span>'
+                     f'</div>')
+    except Exception:
+        pass
+
     # 최근 공시 한 줄.
     #   SEC 는 야후와 다른 서버라 카드마다 불러도 야후 조회에 영향이 없다.
     #   중요한 것만 한 줄 (임원 매매는 상세 화면에서 본다).
@@ -831,7 +849,7 @@ def card(d, mode, band=None, buy=None):
           <div class="px">{px}</div><div class="{cls}">{chtxt}</div></div>
       </div>
       {scorelines}
-      {filline}{valline}{buyline}{bandline}{fp_line(footprint(d['ticker']))}
+      {eline}{filline}{valline}{buyline}{bandline}{fp_line(footprint(d['ticker']))}
     </div>""", unsafe_allow_html=True)
 
 
