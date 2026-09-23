@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-23 22:20"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-23 22:29"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -662,14 +662,24 @@ def price_chart(t, currency="USD"):
                '<b style="color:#DC2626">■</b> 상승 · '
                '<b style="color:#2563EB">■</b> 하락')
     if marks:
-        if any(not m.get("verified", True) for m in marks):
-            _legend += ('<br><b style="color:#16A34A">▲</b> RSI 30 아래로 내려간 날 '
-                        '<span style="color:#B45309">(검증 미통과 · 참고용)</span> '
-                        '— 캔들 아래에 찍히고 점선이 그날이다')
-        else:
-            _legend += ('<br><b style="color:#16A34A">▲</b> 사도 됨 쪽 · '
-                        '<b style="color:#7C3AED">▼</b> 사지 마라 쪽 '
-                        '— 캔들 아래(▲)·위(▼)에 찍히고 점선이 그날이다')
+        # 규칙마다 기호·이름·검증 상태를 적는다
+        _seen, _items = set(), []
+        for mk in marks:
+            if mk["key"] in _seen:
+                continue
+            _seen.add(mk["key"])
+            _up = mk["dir"] == "+"
+            _c = "#16A34A" if _up else "#7C3AED"
+            _a = "▲" if _up else "▼"
+            if not mk.get("tested", True):
+                _st = ' <span style="color:#B45309">(아직 검증 안 함 · 참고)</span>'
+            elif not mk.get("verified", True):
+                _st = ' <span style="color:#B45309">(검증 미통과 · 참고)</span>'
+            else:
+                _st = " (검증 통과)"
+            _items.append(f'<b style="color:{_c}">{_a}</b> {mk["label"]}{_st}')
+        _legend += ('<br>' + ' · '.join(_items)
+                    + '<br>▲ 는 캔들 아래, ▼ 는 캔들 위에 찍히고 점선이 그날이다')
         # 어디 찍혔는지 날짜로도 적는다 (최근 순 6개)
         _days = []
         for mk in sorted(marks, key=lambda m: -m["i"])[:6]:
@@ -709,10 +719,13 @@ def price_chart(t, currency="USD"):
                 meta.append(g["extra"])
             if g.get("note"):
                 meta.append(g["note"])
-            tag = ('' if g.get("verified", True) else
+            _t = ("" if g.get("verified", True) else
+                  "아직 검증 안 함 · 참고" if not g.get("tested", True) else
+                  "검증 미통과 · 참고")
+            tag = ('' if not _t else
                    ' <span style="font-size:.66rem;font-weight:600;color:#B45309;'
                    'border:1px solid #B45309;border-radius:4px;padding:0 4px">'
-                   '검증 미통과 · 참고</span>')
+                   f'{_t}</span>')
             out_s.append(
                 f'<div style="padding:6px 0;border-bottom:1px solid #F1F1F2">'
                 f'<div style="font-size:.82rem;color:{col};font-weight:600">'

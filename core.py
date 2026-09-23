@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-23 22:20"
+BUILD = "2026-09-23 22:29"
 
 SCORE_VERSION = 2
 
@@ -2390,6 +2390,14 @@ SIGNALS = {
           "caveat": "검증 미통과 · 참고용. 나스닥100 15년에선 아무 날 산 것과 차이가 "
                     "없었다. 1,004종목(소형주 포함)에선 +7.6%p 였는데, 소형주가 "
                     "튀어 오른 몫으로 보인다"},
+    # ★ 굥 결정으로 켠다 (2026-09-23). 아직 sigtest 로 한 번도 재지 않았다.
+    #   숫자가 없으므로 화면에 수치를 안 적는다.
+    "L": {"label": "RSI 80 위",
+          "dir": "−",
+          "verified": False, "tested": False,
+          "vsz": None, "years": None, "hold": None,
+          "caveat": "아직 검증 안 함 · 참고용. 과열 표시일 뿐이고, 강하게 오르는 "
+                    "종목은 80 위에서 한참 더 가기도 한다"},
 }
 
 
@@ -2420,7 +2428,7 @@ def _rsi_list(c, n=14):
 #   상태(state)  = 며칠씩 이어진다 → 차트엔 켜지는 첫날만 찍는다
 #   사건(event)  = 그날 하루 → 그날 찍는다
 RULE_KIND = {"B": "state", "C": "event", "E": "state", "G": "state",
-             "I": "event", "J": "event"}
+             "I": "event", "J": "event", "L": "state"}
 
 
 def _rule_series(rows):
@@ -2441,16 +2449,16 @@ def _rule_series(rows):
             return None
         return sum(xs[i + 1 - k:i + 1]) / k
 
-    rsi = _rsi_list(c) if "E" in SIGNALS else None
+    rsi = _rsi_list(c) if ("E" in SIGNALS or "L" in SIGNALS) else None
 
     out = {}
     for key in SIGNALS:
         ser = [None] * n
-        if key == "E":
+        if key in ("E", "L"):
             # RSI 는 앞 50일쯤은 아직 안정되지 않아 쓰지 않는다
             for i in range(n):
                 if i >= 50 and rsi[i] is not None:
-                    ser[i] = rsi[i] < 30
+                    ser[i] = (rsi[i] < 30) if key == "E" else (rsi[i] > 80)
             out[key] = ser
             continue
         for i in range(n):
@@ -2512,6 +2520,7 @@ def signal_marks(rows, max_each=40):
             marks.append({"i": i, "key": key,
                           "dir": meta.get("dir", "+"),
                           "verified": meta.get("verified", True),
+                          "tested": meta.get("tested", True),
                           "label": meta.get("label", key)})
     return sorted(marks, key=lambda m: m["i"])
 
@@ -2556,10 +2565,10 @@ def signal_state(rows):
                     hi = max(win)
                     on = c[i] >= hi
                     note = f"52주 고점 {hi:,.2f}"
-            elif k == "E":
+            elif k in ("E", "L"):
                 r_ = _rsi_list(c)[i]
                 if r_ is not None:
-                    on = r_ < 30
+                    on = (r_ < 30) if k == "E" else (r_ > 80)
                     note = f"RSI {r_:.0f}"
             elif k == "G":
                 win = c[max(0, i - 251):i + 1]
@@ -2590,6 +2599,7 @@ def signal_state(rows):
                     "years": meta.get("years"), "hold": meta.get("hold"),
                     "extra": meta.get("extra"), "caveat": meta.get("caveat"),
                     "verified": meta.get("verified", True),
+                    "tested": meta.get("tested", True),
                     "note": note})
     return out
 
