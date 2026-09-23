@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-21 22:48"
+BUILD = "2026-09-23 09:57"
 
 SCORE_VERSION = 2
 
@@ -2298,8 +2298,11 @@ def footprint_from(h):
 # ═════════════════════════════════════════════════════════════
 
 @cache(3600)
-def chart_data(t, period="1y"):
-    """일봉 + 이동평균 + 기간별 수익률. 실패 시 None."""
+def chart_data(t, period="2y"):
+    """일봉 + 이동평균 + 기간별 수익률. 실패 시 None.
+
+    2026-09-23: 1년 → 2년. 120일선을 보려면 1년으로는 앞이 비어 있다.
+    """
     try:
         h = yf.Ticker(t).history(period=period, auto_adjust=True)
     except Exception:
@@ -2310,6 +2313,7 @@ def chart_data(t, period="1y"):
     c = h["Close"]
     ma20 = c.rolling(20).mean()
     ma50 = c.rolling(50).mean()
+    ma120 = c.rolling(120).mean()
 
     def ret(days):
         """N거래일 전 대비 수익률.
@@ -2334,6 +2338,7 @@ def chart_data(t, period="1y"):
             "volume": float(row["Volume"]),
             "ma20": (float(ma20.iloc[i]) if ma20.iloc[i] == ma20.iloc[i] else None),
             "ma50": (float(ma50.iloc[i]) if ma50.iloc[i] == ma50.iloc[i] else None),
+            "ma120": (float(ma120.iloc[i]) if ma120.iloc[i] == ma120.iloc[i] else None),
         })
 
     return {
@@ -2343,6 +2348,101 @@ def chart_data(t, period="1y"):
         "hi": float(c.max()), "lo": float(c.min()),
         "last": float(c.iloc[-1]),
     }
+
+
+
+# ═════════════════════════════════════════════════════════════
+# 가격 신호
+#
+#   ★ 검증을 통과한 규칙만 여기에 적는다. 화면은 이 표에 있는 것만 보여 준다.
+#     지금은 비어 있다. sigtest 결과가 나오기 전엔 화면에 아무것도 안 나온다.
+#
+#   통과 기준 (2026-09-23 에 미리 정해 둔 것)
+#     · 대조군 Z(아무 날 매수) 를 연도별로 뺀 값으로 판정
+#     · 표본 20개 넘는 연도 중 80% 이상 같은 부호
+#     · Z 대비 |3%p| 이상
+#     · 21일·63일 둘 다 같은 방향으로 통과
+#
+#   채우는 법 (sigtest 결과를 그대로 옮긴다)
+#     SIGNALS = {
+#         "B": {"label": "120일선 위 · 상승 중",
+#               "dir": "+",          # + 사도 됨 / − 사지 마라
+#               "vsz": 4.2,          # Z 대비 %p (63일)
+#               "years": "9/11",     # 부호가 맞은 연도
+#               "hold": 63},
+#     }
+SIGNALS = {}
+
+
+def signal_state(rows):
+    """차트 데이터로 지금 켜져 있는 신호를 찾는다.
+
+    rows  = chart_data()["rows"]
+    돌려주는 값: [{"key","label","on","dir","vsz","years","note"}, ...]
+
+    ★ SIGNALS 에 없는 규칙은 계산도 안 한다.
+      검증 안 된 것을 화면에 내지 않기 위해서다.
+    ★ A(모멘텀 상위 20%)는 종목끼리 비교해야 해서 한 종목만으로는 못 낸다.
+      SIGNALS 에 A 가 들어오면 snapshot 을 봐야 한다.
+    """
+    if not SIGNALS or not rows or len(rows) < 130:
+        return []
+
+    c = [r["close"] for r in rows]
+    v = [r.get("volume") or 0.0 for r in rows]
+    o = [r.get("open") or r["close"] for r in rows]
+
+    def sma(xs, n, i):
+        if i + 1 < n:
+            return None
+        seg = xs[i + 1 - n:i + 1]
+        return sum(seg) / n
+
+    i = len(c) - 1
+    out = []
+    for k, meta in SIGNALS.items():
+        on, note = None, ""
+        try:
+            if k == "B":
+                m120, m120p = sma(c, 120, i), sma(c, 120, i - 5)
+                if m120 and m120p:
+                    on = c[i] > m120 and m120 > m120p
+                    note = f"종가 {c[i]:,.2f} · 120일선 {m120:,.2f}"
+            elif k == "C":
+                win = c[max(0, i - 252):i]          # 어제까지의 52주 고점
+                if win:
+                    hi = max(win)
+                    on = c[i] >= hi
+                    note = f"52주 고점 {hi:,.2f}"
+            elif k == "G":
+                win = c[max(0, i - 251):i + 1]
+                hi = max(win)
+                dd = (c[i] / hi - 1) * 100 if hi else None
+                if dd is not None:
+                    on = -45 <= dd <= -25
+                    note = f"고점 대비 {dd:.0f}%"
+            elif k == "I":
+                a1, a2 = sma(c, 20, i), sma(c, 50, i)
+                b1, b2 = sma(c, 20, i - 1), sma(c, 50, i - 1)
+                if None not in (a1, a2, b1, b2):
+                    on = a1 > a2 and b1 <= b2
+                    note = "20일선이 50일선을 막 넘음" if on else ""
+            elif k == "J":
+                v20 = sma(v, 20, i)
+                if v20:
+                    on = v[i] > 2 * v20 and c[i] > o[i]
+                    note = f"거래량 평균의 {v[i]/v20:.1f}배"
+            else:
+                continue                             # 아직 화면용 계산이 없는 규칙
+        except Exception:
+            on = None
+        if on is None:
+            continue
+        out.append({"key": k, "label": meta.get("label", k), "on": bool(on),
+                    "dir": meta.get("dir", "+"), "vsz": meta.get("vsz"),
+                    "years": meta.get("years"), "hold": meta.get("hold"),
+                    "note": note})
+    return out
 
 
 def fp_verdict(score):

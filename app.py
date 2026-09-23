@@ -38,7 +38,7 @@ from core import (BUILD as CORE_BUILD,
                   filings, item_text, split_filings,
                   YEARLY_AXES, YEARLY_TRI,
                   market_snapshot, vix_mood,
-                  USD_KRW, chart_data,
+                  USD_KRW, chart_data, signal_state, SIGNALS,
                   money,
                   CHARCOAL, ORANGE, AMBER, SLATE, MUTED, BLUE, GRAY,
                   score_ten, score_lt, fetch, won, pctile,
@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-21 22:48"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-23 09:57"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -511,7 +511,7 @@ def damo_section(d):
 
 
 def price_chart(t, currency="USD"):
-    """1년 일봉 캔들 + 20/50MA + 기간별 수익률."""
+    """2년 일봉 캔들 + 20/50/120MA + 기간별 수익률 + 검증 통과한 신호."""
     d = chart_data(t)
     if not d or not d["rows"]:
         return
@@ -567,7 +567,8 @@ def price_chart(t, currency="USD"):
                      f'height="{hgt:.1f}" fill="{col}"/>')
 
     # 이동평균선
-    for key, col, wdt in (("ma20", ORANGE, 1.3), ("ma50", MUTED, 1.1)):
+    for key, col, wdt in (("ma20", ORANGE, 1.3), ("ma50", MUTED, 1.1),
+                          ("ma120", "#3F4956", 1.1)):
         pts = [f"{x(i):.1f},{y(r[key]):.1f}" for i, r in enumerate(rows)
                if r.get(key)]
         if len(pts) > 2:
@@ -581,7 +582,7 @@ def price_chart(t, currency="USD"):
                      f'fill=MUTED text-anchor="{anchor}">'
                      f'{rows[i]["date"][2:].replace("-", ".")}</text>')
 
-    st.markdown('<div class="sect">주가 흐름 (1년)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sect">주가 흐름 (2년)</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div style="margin:2px 0 6px"><svg viewBox="0 0 {W} {H}" width="100%">'
         + "".join(parts) + "</svg></div>", unsafe_allow_html=True)
@@ -604,8 +605,47 @@ def price_chart(t, currency="USD"):
             f'</div>')
     st.markdown(f'<div style="display:flex;gap:2px;margin-bottom:6px">'
                 + "".join(cells) + "</div>", unsafe_allow_html=True)
-    st.markdown('<p class="note">주황 20일선 · 회색 50일선 · '
+    st.markdown('<p class="note">주황 20일선 · 회색 50일선 · 진회색 120일선 · '
                 '빨강 상승 · 파랑 하락</p>', unsafe_allow_html=True)
+
+    # ── 신호 ──
+    #   ★ 검증을 통과한 규칙만 나온다 (core.SIGNALS).
+    #     통과한 게 없으면 섹션 자체가 안 나온다.
+    #     지표(RSI·MACD·밴드)는 그리지 않는다. 그림은 증권사 앱이 낫다.
+    try:
+        sigs = signal_state(rows)
+    except Exception:
+        sigs = []
+    if sigs:
+        st.markdown('<div class="sect">신호</div>', unsafe_allow_html=True)
+        out_s = []
+        for g in sigs:
+            mark = "●" if g["on"] else "○"
+            if g["on"]:
+                col = "#16A34A" if g["dir"] == "+" else "#DC2626"
+            else:
+                col = MUTED
+            meta = []
+            if g.get("vsz") is not None:
+                meta.append(f"{g['hold']}일 · 대조군 대비 {g['vsz']:+.1f}%p")
+            if g.get("years"):
+                meta.append(f"{g['years']}년")
+            if g.get("note"):
+                meta.append(g["note"])
+            out_s.append(
+                f'<div style="padding:6px 0;border-bottom:1px solid #F1F1F2">'
+                f'<div style="font-size:.82rem;color:{col};font-weight:600">'
+                f'{mark} {g["label"]}'
+                + ('  <span style="font-size:.66rem;font-weight:400">'
+                   '사지 마라 쪽</span>' if g["dir"] == "−" else "")
+                + f'</div>'
+                f'<div style="font-size:.66rem;color:{MUTED};margin-top:2px">'
+                f'{" · ".join(meta)}</div></div>')
+        st.markdown("".join(out_s), unsafe_allow_html=True)
+        st.markdown('<p class="note">● 켜짐 · ○ 꺼짐. '
+                    '백테스트를 통과한 규칙만 나옵니다. '
+                    '대조군(아무 날 매수) 대비 수치이고, 점수에는 안 들어갑니다.</p>',
+                    unsafe_allow_html=True)
 
 
 def fp_section(fp):
