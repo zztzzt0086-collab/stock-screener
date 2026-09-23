@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-23 09:57"
+BUILD = "2026-09-23 10:07"
 
 SCORE_VERSION = 2
 
@@ -2198,7 +2198,13 @@ def footprint(t):
 def footprint_from(h):
     """가격·거래량 데이터프레임에서 수급 점수 계산.
     백테스트에서 과거 시점 데이터를 잘라 넣을 수 있도록 분리해 두었다."""
-    if h is None or len(h) < 60:
+    if h is None:
+        return None
+    # ★ chart_data 와 같은 이유. 오늘 행의 Close/Volume 이 NaN 으로 올 수 있다.
+    #   그 상태로 계산하면 px_chg 가 nan 이 되고, nan 은 조건식에서 False 로
+    #   떨어져 점수가 조용히 틀어진다.
+    h = h.dropna(subset=["Close", "Volume"])
+    if len(h) < 60:
         return None
 
     c, v = h["Close"], h["Volume"].astype(float)
@@ -2298,16 +2304,18 @@ def footprint_from(h):
 # ═════════════════════════════════════════════════════════════
 
 @cache(3600)
-def chart_data(t, period="2y"):
-    """일봉 + 이동평균 + 기간별 수익률. 실패 시 None.
-
-    2026-09-23: 1년 → 2년. 120일선을 보려면 1년으로는 앞이 비어 있다.
-    """
+def chart_data(t, period="1y"):
+    """일봉 + 이동평균 + 기간별 수익률. 실패 시 None."""
     try:
         h = yf.Ticker(t).history(period=period, auto_adjust=True)
     except Exception:
         return None
-    if h is None or len(h) < 30:
+    if h is None or h.empty:
+        return None
+    # ★ 장중에 받으면 오늘 행이 반쯤 와서 Close 가 NaN 이다.
+    #   그대로 두면 c.iloc[-1] 이 NaN 이라 수익률이 전부 nan 으로 나온다.
+    h = h.dropna(subset=["Close"])
+    if len(h) < 30:
         return None
 
     c = h["Close"]
@@ -2372,6 +2380,96 @@ def chart_data(t, period="2y"):
 #               "hold": 63},
 #     }
 SIGNALS = {}
+
+
+# 규칙이 "상태"인지 "사건"인지.
+#   상태(state)  = 며칠씩 이어진다 → 차트엔 켜지는 첫날만 찍는다
+#   사건(event)  = 그날 하루 → 그날 찍는다
+RULE_KIND = {"B": "state", "C": "event", "G": "state",
+             "I": "event", "J": "event"}
+
+
+def _rule_series(rows):
+    """SIGNALS 에 있는 규칙의 날짜별 참/거짓.
+
+    돌려주는 값: {"B": [None, None, True, ...], ...}
+    계산 못 한 날은 None.
+    """
+    if not SIGNALS or not rows:
+        return {}
+    c = [r["close"] for r in rows]
+    v = [r.get("volume") or 0.0 for r in rows]
+    o = [r.get("open") or r["close"] for r in rows]
+    n = len(c)
+
+    def sma(xs, k, i):
+        if i < 0 or i + 1 < k:
+            return None
+        return sum(xs[i + 1 - k:i + 1]) / k
+
+    out = {}
+    for key in SIGNALS:
+        ser = [None] * n
+        for i in range(n):
+            try:
+                if key == "B":
+                    m, mp = sma(c, 120, i), sma(c, 120, i - 5)
+                    ser[i] = (c[i] > m and m > mp) if (m and mp) else None
+                elif key == "C":
+                    if i >= 1:
+                        win = c[max(0, i - 252):i]
+                        ser[i] = c[i] >= max(win) if win else None
+                elif key == "G":
+                    win = c[max(0, i - 251):i + 1]
+                    hi = max(win) if win else None
+                    if hi:
+                        dd = (c[i] / hi - 1) * 100
+                        ser[i] = -45 <= dd <= -25
+                elif key == "I":
+                    a1, a2 = sma(c, 20, i), sma(c, 50, i)
+                    b1, b2 = sma(c, 20, i - 1), sma(c, 50, i - 1)
+                    if None not in (a1, a2, b1, b2):
+                        ser[i] = a1 > a2 and b1 <= b2
+                elif key == "J":
+                    v20 = sma(v, 20, i)
+                    if v20:
+                        ser[i] = v[i] > 2 * v20 and c[i] > o[i]
+            except Exception:
+                ser[i] = None
+        out[key] = ser
+    return out
+
+
+def signal_marks(rows, max_each=40):
+    """차트에 찍을 화살표.
+
+    돌려주는 값: [{"i": 행번호, "key", "dir", "label"}, ...]
+      dir "+" = 사도 됨 쪽 · "−" = 사지 마라 쪽
+
+    ★ 상태형 규칙은 켜지는 첫날만 찍는다.
+      매일 찍으면 화면이 화살표로 덮인다.
+    ★ 지나간 신호를 보면 "그때 샀으면" 하는 착각이 생긴다.
+      그래서 화면에 검증 수치를 같이 적는다.
+    """
+    ser = _rule_series(rows)
+    marks = []
+    for key, vals in ser.items():
+        meta = SIGNALS.get(key, {})
+        kind = RULE_KIND.get(key, "event")
+        idxs = []
+        for i, x in enumerate(vals):
+            if not x:
+                continue
+            if kind == "state" and i > 0 and vals[i - 1]:
+                continue                      # 이어지는 날은 건너뛴다
+            idxs.append(i)
+        if len(idxs) > max_each:               # 너무 많으면 최근 것만
+            idxs = idxs[-max_each:]
+        for i in idxs:
+            marks.append({"i": i, "key": key,
+                          "dir": meta.get("dir", "+"),
+                          "label": meta.get("label", key)})
+    return sorted(marks, key=lambda m: m["i"])
 
 
 def signal_state(rows):

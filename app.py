@@ -38,7 +38,7 @@ from core import (BUILD as CORE_BUILD,
                   filings, item_text, split_filings,
                   YEARLY_AXES, YEARLY_TRI,
                   market_snapshot, vix_mood,
-                  USD_KRW, chart_data, signal_state, SIGNALS,
+                  USD_KRW, chart_data, signal_state, signal_marks, SIGNALS,
                   money,
                   CHARCOAL, ORANGE, AMBER, SLATE, MUTED, BLUE, GRAY,
                   score_ten, score_lt, fetch, won, pctile,
@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-23 09:57"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-23 10:07"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -511,7 +511,7 @@ def damo_section(d):
 
 
 def price_chart(t, currency="USD"):
-    """2년 일봉 캔들 + 20/50/120MA + 기간별 수익률 + 검증 통과한 신호."""
+    """1년 일봉 캔들 + 20/50/120MA + 기간별 수익률 + 검증 통과한 신호."""
     d = chart_data(t)
     if not d or not d["rows"]:
         return
@@ -575,6 +575,32 @@ def price_chart(t, currency="USD"):
             parts.append(f'<polyline points="{" ".join(pts)}" fill="none" '
                          f'stroke="{col}" stroke-width="{wdt}" opacity="0.85"/>')
 
+    # ── 신호 화살표 ──
+    #   ★ core.SIGNALS 에 있는 규칙만. 비어 있으면 아무것도 안 그린다.
+    #   초록 ▲ = 사도 됨 쪽 (캔들 아래)
+    #   보라 ▼ = 사지 마라 쪽 (캔들 위)
+    #   빨강/파랑은 이미 상승/하락이라 신호 색은 따로 쓴다.
+    SIG_UP, SIG_DN = "#16A34A", "#7C3AED"
+    try:
+        marks = signal_marks(rows)
+    except Exception:
+        marks = []
+    for mk in marks:
+        i = mk["i"]
+        if i >= n:
+            continue
+        xx = x(i)
+        if mk["dir"] == "+":
+            yy = y(rows[i]["low"]) + 7          # 캔들 아래
+            pts = f"{xx:.1f},{yy-5:.1f} {xx-3.5:.1f},{yy:.1f} {xx+3.5:.1f},{yy:.1f}"
+            col = SIG_UP
+        else:
+            yy = y(rows[i]["high"]) - 7         # 캔들 위
+            pts = f"{xx:.1f},{yy+5:.1f} {xx-3.5:.1f},{yy:.1f} {xx+3.5:.1f},{yy:.1f}"
+            col = SIG_DN
+        parts.append(f'<polygon points="{pts}" fill="{col}" opacity="0.9">'
+                     f'<title>{rows[i]["date"]} · {mk["label"]}</title></polygon>')
+
     # 날짜 라벨 (양 끝 + 가운데)
     for i in (0, n // 2, n - 1):
         anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
@@ -582,7 +608,7 @@ def price_chart(t, currency="USD"):
                      f'fill=MUTED text-anchor="{anchor}">'
                      f'{rows[i]["date"][2:].replace("-", ".")}</text>')
 
-    st.markdown('<div class="sect">주가 흐름 (2년)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sect">주가 흐름 (1년)</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div style="margin:2px 0 6px"><svg viewBox="0 0 {W} {H}" width="100%">'
         + "".join(parts) + "</svg></div>", unsafe_allow_html=True)
@@ -605,8 +631,13 @@ def price_chart(t, currency="USD"):
             f'</div>')
     st.markdown(f'<div style="display:flex;gap:2px;margin-bottom:6px">'
                 + "".join(cells) + "</div>", unsafe_allow_html=True)
-    st.markdown('<p class="note">주황 20일선 · 회색 50일선 · 진회색 120일선 · '
-                '빨강 상승 · 파랑 하락</p>', unsafe_allow_html=True)
+    _legend = ('주황 20일선 · 회색 50일선 · 진회색 120일선 · '
+               '빨강 상승 · 파랑 하락')
+    if marks:
+        _legend += ('<br><b style="color:#16A34A">▲</b> 사도 됨 쪽 · '
+                    '<b style="color:#7C3AED">▼</b> 사지 마라 쪽 '
+                    '(검증 통과한 규칙만. 화살표에 마우스를 올리면 날짜와 규칙이 나옵니다)')
+    st.markdown(f'<p class="note">{_legend}</p>', unsafe_allow_html=True)
 
     # ── 신호 ──
     #   ★ 검증을 통과한 규칙만 나온다 (core.SIGNALS).
