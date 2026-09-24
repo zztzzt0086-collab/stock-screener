@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-23 22:44"
+BUILD = "2026-09-24 21:57"
 
 SCORE_VERSION = 2
 
@@ -962,6 +962,7 @@ MARKET_TICKERS = [
     ("원/달러",   "KRW=X",    "level"),
     ("나스닥",    "^IXIC",    "pct"),
     ("S&P",      "^GSPC",    "pct"),
+    ("반도체",    "^SOX",     "pct"),      # 필라델피아 반도체 지수. 종목이 빠진 건지 업종이 빠진 건지
     ("미10년",    "^TNX",     "level"),
 ]
 
@@ -974,6 +975,10 @@ def market_snapshot():
         try:
             h = yf.Ticker(tk).history(period="5d")
             if h is None or len(h) < 1:
+                continue
+            # 장중엔 오늘 행 Close 가 NaN 으로 올 수 있다 (차트와 같은 문제)
+            h = h.dropna(subset=["Close"])
+            if len(h) < 1:
                 continue
             c = h["Close"]
             last = float(c.iloc[-1])
@@ -1808,6 +1813,12 @@ def fetch(t):
         "ticker": t.upper(),
         "name": info.get("shortName") or info.get("longName"),
         "sector": info.get("sector"),
+        # 회사 개요 (채점과 무관, 화면용). 야후 설명은 영어로 온다.
+        "industry": info.get("industry"),
+        "country": info.get("country"),
+        "employees": info.get("fullTimeEmployees"),
+        "website": info.get("website"),
+        "summary": info.get("longBusinessSummary"),
         "price": info.get("currentPrice") or info.get("regularMarketPrice"),
         "chg": info.get("regularMarketChangePercent"),
         "currency": cur,
@@ -2048,6 +2059,206 @@ def split_filings(fl):
     return main, insider
 
 
+
+# ═════════════════════════════════════════════════════════════
+# EDGAR 재무 (XBRL companyfacts)
+#
+#   회사가 SEC 에 낸 10-K 원본 숫자. 야후는 4년치뿐이지만 여기는 보통 15년 넘게 있다.
+#   1단계: 연간 숫자만 받아 오고 야후와 대조한다. 점수에는 아직 안 쓴다.
+#
+#   ★ 알고 쓸 것
+#     · 미국 회계기준(us-gaap)으로 내는 회사만 된다. TSM·ASML 같은 IFRS 회사는 빈다.
+#     · 회사가 해마다 태그를 바꾼다 (예: 2018년 SalesRevenueNet → RevenueFromContract...).
+#       그래서 후보 태그를 여러 개 두고, 결산일마다 먼저 나오는 걸 쓴다.
+#     · 같은 결산일 숫자가 다음 해 10-K 에 비교용으로 또 나온다 (재작성 포함).
+#       가장 나중에 낸 값을 쓴다.
+#     · 부채는 태그 조합이 회사마다 달라 근사치다.
+# ═════════════════════════════════════════════════════════════
+
+EDGAR_ANNUAL_FORMS = {"10-K", "10-K/A", "10-KT", "20-F", "20-F/A", "40-F", "40-F/A"}
+
+EDGAR_TAGS = {
+    # 한 해 동안 쌓이는 값 (기간이 1년인 것만)
+    "rev": ["Revenues",
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "RevenueFromContractWithCustomerIncludingAssessedTax",
+            "SalesRevenueNet", "SalesRevenueGoodsNet", "SalesRevenueServicesNet"],
+    "op": ["OperatingIncomeLoss"],
+    "ni": ["NetIncomeLoss", "ProfitLoss"],
+    "pretax": ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+               "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"],
+    "tax": ["IncomeTaxExpenseBenefit"],
+    "rnd": ["ResearchAndDevelopmentExpense",
+            "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"],
+    "ocf": ["NetCashProvidedByUsedInOperatingActivities",
+            "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
+    "capex": ["PaymentsToAcquirePropertyPlantAndEquipment",
+              "PaymentsToAcquireProductiveAssets"],
+    "intexp": ["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt"],
+    "shares": ["WeightedAverageNumberOfDilutedSharesOutstanding"],
+    # 영업이익 줄을 표준 태그로 안 적는 해가 있다 (COHR 2025·2026 등) → 계산용
+    "gp": ["GrossProfit"],
+    "opex": ["OperatingExpenses"],
+    "costs": ["CostsAndExpenses"],
+    # 결산일 하루의 값
+    "eq": ["StockholdersEquity",
+           "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+    "cash": ["CashAndCashEquivalentsAtCarryingValue",
+             "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+    "sti": ["ShortTermInvestments", "MarketableSecuritiesCurrent",
+            "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+            "AvailableForSaleSecuritiesCurrent"],
+    "debt_total": ["LongTermDebt",
+                   "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"],
+    "debt_nc": ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"],
+    "debt_cur": ["LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent",
+                 "DebtCurrent"],
+    "debt_st": ["ShortTermBorrowings", "CommercialPaper"],
+    # 자본과 부채 사이에 따로 적는 우선주 등 (COHR 의 베인 우선주가 여기 있다)
+    #   10-K 자기자본에는 빠지고 야후는 자본에 더해 보여 준다.
+    "temp_eq": ["TemporaryEquityCarryingAmountAttributableToParent",
+                "TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests"],
+}
+EDGAR_INSTANT = {"eq", "cash", "sti", "debt_total", "debt_nc", "debt_cur", "debt_st",
+                 "temp_eq"}
+
+
+def _edgar_pick(gaap, tags, instant, unit):
+    """태그 후보들에서 결산일별 값을 고른다.
+
+    돌려주는 값: ({결산일: 값}, {결산일: 쓴 태그})
+    """
+    from datetime import date as _d
+    vals, used = {}, {}
+    for tag in tags:
+        node = gaap.get(tag)
+        if not node:
+            continue
+        units = node.get("units") or {}
+        rows = units.get(unit)
+        if rows is None:
+            continue
+        best = {}                                   # 결산일 → (filed, val)
+        for r in rows:
+            if r.get("form") not in EDGAR_ANNUAL_FORMS:
+                continue
+            end = r.get("end")
+            if not end or r.get("val") is None:
+                continue
+            if not instant:
+                st_ = r.get("start")
+                if not st_:
+                    continue
+                try:
+                    days = (_d.fromisoformat(end) - _d.fromisoformat(st_)).days
+                except Exception:
+                    continue
+                if not (340 <= days <= 380):        # 1년짜리만 (52·53주 회계연도 포함)
+                    continue
+            filed = r.get("filed") or ""
+            if end not in best or filed > best[end][0]:
+                best[end] = (filed, r["val"])
+        for end, (_, v) in best.items():
+            if end not in vals:                     # 앞 순위 태그가 이미 있으면 그대로
+                vals[end] = v
+                used[end] = tag
+    return vals, used
+
+
+@cache(86400)
+def edgar_annual(t, max_years=17):
+    """EDGAR 연간 재무. 실패하면 빈 dict.
+
+    돌려주는 값
+      entity  회사명      currency  통화
+      years   [{"end", "rev", "op", "ni", "pretax", "tax", "rnd", "ocf", "capex",
+                "intexp", "shares", "eq", "cash", "sti", "debt"}, ...]  오래된 순
+      tags    {항목: {결산일: 쓴 태그}}   어느 태그에서 왔는지 (검산용)
+    """
+    import urllib.request
+    from datetime import date as _d
+    cik = _sec_ticker_map().get(str(t).upper())
+    if not cik:
+        return {}
+    try:
+        req = urllib.request.Request(
+            f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
+            headers={"User-Agent": SEC_UA})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.load(r)
+    except Exception:
+        return {}
+
+    gaap = (data.get("facts") or {}).get("us-gaap") or {}
+    if not gaap:
+        return {}
+
+    # 통화: USD 가 있으면 USD
+    cur = "USD"
+    for tg in EDGAR_TAGS["rev"] + EDGAR_TAGS["ni"]:
+        u = (gaap.get(tg) or {}).get("units") or {}
+        if u:
+            cur = "USD" if "USD" in u else next(iter(u))
+            break
+
+    raw, tags = {}, {}
+    for key, cands in EDGAR_TAGS.items():
+        unit = "shares" if key == "shares" else cur
+        raw[key], tags[key] = _edgar_pick(gaap, cands, key in EDGAR_INSTANT, unit)
+
+    # 결산일 = 매출이나 순이익이 1년치로 잡힌 날
+    ends = sorted(set(raw["rev"]) | set(raw["ni"]))
+    if not ends:
+        return {}
+
+    def _inst(key, end):
+        v = raw[key].get(end)
+        if v is not None:
+            return v
+        # 결산일이 하루이틀 어긋나게 찍힌 회사가 있다 → 7일 안이면 같은 날로 본다
+        try:
+            e0 = _d.fromisoformat(end)
+        except Exception:
+            return None
+        for k2, v2 in raw[key].items():
+            try:
+                if abs((_d.fromisoformat(k2) - e0).days) <= 7:
+                    return v2
+            except Exception:
+                continue
+        return None
+
+    years = []
+    for end in ends[-max_years:]:
+        y = {"end": end}
+        for key in ("rev", "op", "ni", "pretax", "tax", "rnd", "ocf", "capex",
+                    "intexp", "shares"):
+            y[key] = raw[key].get(end)
+        # 영업이익이 비면 계산해서 채우고 표시한다
+        y["op_calc"] = False
+        if y["op"] is None:
+            gp, ox, cs = (raw[k].get(end) for k in ("gp", "opex", "costs"))
+            if gp is not None and ox is not None:
+                y["op"], y["op_calc"] = gp - ox, True
+            elif y["rev"] is not None and cs is not None:
+                y["op"], y["op_calc"] = y["rev"] - cs, True
+        for key in ("eq", "cash", "sti", "temp_eq"):
+            y[key] = _inst(key, end)
+        tot, nc, cu, stb = (_inst(k, end) for k in
+                            ("debt_total", "debt_nc", "debt_cur", "debt_st"))
+        if tot is not None:
+            y["debt"] = tot + (stb or 0)
+        elif nc is not None or cu is not None:
+            y["debt"] = (nc or 0) + (cu or 0) + (stb or 0)
+        else:
+            y["debt"] = stb
+        if y["capex"] is not None:
+            y["capex"] = abs(y["capex"])
+        years.append(y)
+    return {"entity": data.get("entityName"), "currency": cur,
+            "years": years, "tags": tags}
+
+
 @cache(1800)
 def filings(t, n=10, kinds=None, all_forms=False):
     """최근 공시 목록. 실패하면 빈 리스트.
@@ -2116,6 +2327,124 @@ def filings(t, n=10, kinds=None, all_forms=False):
         return out[:n]
     # 중요한 것 n 건 + 임원 매매 몇 건
     return main[:n] + insider[:max(0, n - len(main[:n])) or 3]
+
+
+
+
+@cache(86400)
+def holders(t, n=5):
+    """대주주 정보. 실패하면 빈 dict.
+
+    돌려주는 값
+      insider_pct  내부자 보유 %        inst_pct  기관 보유 %
+      n_inst       기관 수              top  [{"name","pct","date"}, ...] 상위 n곳
+    ★ 기관 주주는 13F(분기 보고) 라 한 달 반쯤 늦다. 한국 종목은 거의 비어 있다.
+      야후 버전마다 표 모양·열 이름이 달라서 여러 이름을 찾는다.
+    """
+    out = {}
+    try:
+        tk = yf.Ticker(t)
+    except Exception:
+        return out
+
+    # 내부자·기관 비중
+    try:
+        mh = tk.major_holders
+        if mh is not None and len(mh):
+            vals = {}
+            if "Value" in getattr(mh, "columns", []):          # 새 형식: index=이름, Value 열
+                for k, v in mh["Value"].items():
+                    vals[str(k)] = v
+            else:                                           # 옛 형식: 0열=값, 1열=설명
+                for _, r in mh.iterrows():
+                    vals[str(r.iloc[1])] = r.iloc[0]
+
+            def _pct(v):
+                try:
+                    s = str(v).replace("%", "").strip()
+                    x = float(s)
+                    return x * 100 if x <= 1.0 and "%" not in str(v) else x
+                except Exception:
+                    return None
+            for k, v in vals.items():
+                kl = k.lower()
+                if "insider" in kl and "insider_pct" not in out:
+                    out["insider_pct"] = _pct(v)
+                elif ("institution" in kl and "float" not in kl
+                      and "count" not in kl and "number" not in kl
+                      and "inst_pct" not in out):
+                    out["inst_pct"] = _pct(v)
+                elif "count" in kl or "number of institutions" in kl:
+                    try:
+                        out["n_inst"] = int(float(v))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    # 큰 기관 주주
+    try:
+        ih = tk.institutional_holders
+        if ih is not None and len(ih):
+            cols = {c.lower(): c for c in ih.columns}
+            c_name = cols.get("holder")
+            c_pct = cols.get("pctheld") or cols.get("% out") or cols.get("% held")
+            c_date = cols.get("date reported") or cols.get("date")
+            top = []
+            for _, r in ih.head(n).iterrows():
+                name = str(r[c_name]) if c_name else "-"
+                pct = None
+                if c_pct is not None:
+                    try:
+                        x = float(str(r[c_pct]).replace("%", ""))
+                        pct = x * 100 if x <= 1.0 else x
+                    except Exception:
+                        pct = None
+                dt_ = None
+                if c_date is not None:
+                    try:
+                        dt_ = str(r[c_date])[:10]
+                    except Exception:
+                        dt_ = None
+                top.append({"name": name, "pct": pct, "date": dt_})
+            if top:
+                out["top"] = top
+    except Exception:
+        pass
+    return out
+
+
+@cache(604800)
+def translate_ko(text):
+    """영어 → 한국어 자동 번역. 실패하면 None (화면은 영어 원문을 보여 준다).
+
+    ★ deep-translator 로 구글 번역을 부른다. 키가 필요 없는 대신 공식 서비스가
+      아니라 가끔 막히거나 바뀔 수 있다. 한 번 번역한 건 일주일 저장한다.
+    """
+    if not text:
+        return None
+    try:
+        from deep_translator import GoogleTranslator
+    except Exception:
+        return None
+    try:
+        t = str(text).strip()
+        # 한 번에 5,000자까지. 넘으면 문장 단위로 잘라 여러 번 보낸다.
+        chunks, cur = [], ""
+        for sent in t.replace("\n", " ").split(". "):
+            piece = (sent if sent.endswith(".") else sent + ".") + " "
+            if len(cur) + len(piece) > 4500:
+                chunks.append(cur)
+                cur = ""
+            cur += piece
+        if cur.strip():
+            chunks.append(cur)
+        gt = GoogleTranslator(source="auto", target="ko")
+        out = [gt.translate(ch.strip()) for ch in chunks if ch.strip()]
+        res = " ".join(x for x in out if x)
+        return res or None
+    except Exception:
+        return None
 
 
 @cache(1800)
@@ -2401,6 +2730,7 @@ SIGNALS = {
     # ★ 굥 결정으로 켠다 (2026-09-23). 아직 재지 않았다. 사라/팔아라가 아니라 표시만.
     "M": {"label": "RSI 50 상향 돌파",
           "dir": "0", "shape": "dot",
+          "min_gap": 10,        # 50 근처에서 오르내리면 며칠 새 여러 번 떠서 점이 겹친다
           "verified": False, "tested": False,
           "vsz": None, "years": None, "hold": None,
           "caveat": "아직 검증 안 함 · 참고용. RSI 가 50 을 아래에서 위로 넘은 날 "
@@ -2521,12 +2851,15 @@ def signal_marks(rows, max_each=40):
     for key, vals in ser.items():
         meta = SIGNALS.get(key, {})
         kind = RULE_KIND.get(key, "event")
+        gap = meta.get("min_gap", 0)           # 같은 표시 사이 최소 간격(거래일)
         idxs = []
         for i, x in enumerate(vals):
             if not x:
                 continue
             if kind == "state" and i > 0 and vals[i - 1]:
                 continue                      # 이어지는 날은 건너뛴다
+            if gap and idxs and i - idxs[-1] < gap:
+                continue                      # 너무 붙어 있으면 건너뛴다 (겹쳐 보임)
             idxs.append(i)
         if len(idxs) > max_each:               # 너무 많으면 최근 것만
             idxs = idxs[-max_each:]

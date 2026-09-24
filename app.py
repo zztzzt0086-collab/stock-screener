@@ -35,7 +35,7 @@ from core import (BUILD as CORE_BUILD,
                   TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   score_damo, damo_verdict, yearly_series, implied_growth, RETIRED,
                   value_verdict, year_end_prices, news,
-                  filings, item_text, split_filings,
+                  filings, item_text, split_filings, translate_ko, holders,
                   YEARLY_AXES, YEARLY_TRI,
                   market_snapshot, vix_mood,
                   USD_KRW, chart_data, signal_state, signal_marks, SIGNALS,
@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-24 00:05"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-24 20:32"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -263,8 +263,9 @@ def market_bar():
             mood = vix_mood(m["raw"])
             col = (GREEN if m["raw"] < 20 else
                    "#D97706" if m["raw"] < 30 else RED)
-            extra = f' <span style="color:{GRAY};font-weight:400">{mood}</span>'
-        elif lab in ("나스닥", "S&P"):
+            extra = (f' <span style="color:{GRAY};font-weight:400;'
+                     f'font-size:.68rem">{mood}</span>')
+        elif lab in ("나스닥", "S&P", "반도체"):
             col = GREEN if (m.get("chg") or 0) >= 0 else RED
         else:
             col = CHARCOAL
@@ -716,7 +717,7 @@ def price_chart(t, currency="USD"):
     else:
         if SIGNALS:
             _legend += '<br>최근 1년 안에 신호가 뜬 날이 없다 (화살표 없음이 정상)' 
-    st.markdown(f'<p class="note">{_legend}</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="note keep">{_legend}</p>', unsafe_allow_html=True)
 
     # ── 신호 ──
     #   ★ 검증을 통과한 규칙만 나온다 (core.SIGNALS).
@@ -762,9 +763,10 @@ def price_chart(t, currency="USD"):
                 + f'</div>'
                 f'<div style="font-size:.66rem;color:{MUTED};margin-top:2px">'
                 f'{" · ".join(meta)}</div>'
-                + (f'<div style="font-size:.66rem;color:#B45309;margin-top:2px">'
-                   f'※ {g["caveat"]}</div>' if g.get("caveat") else "")
                 + '</div>')
+            if g.get("caveat"):
+                st.markdown(f'<p class="note">※ {g["label"]} — {g["caveat"]}</p>',
+                            unsafe_allow_html=True)
         st.markdown("".join(out_s), unsafe_allow_html=True)
         st.markdown('<p class="note">"지금 켜짐" 이면 오늘 그 조건이 맞다는 뜻. '
                     '"검증 미통과" 표시가 붙은 것은 백테스트를 못 넘은 참고용입니다. '
@@ -1017,9 +1019,107 @@ def card(d, mode, band=None, buy=None):
     </div>""", unsafe_allow_html=True)
 
 
+class _NoteCatcher:
+    """상세 화면을 그리는 동안 회색 설명 글(class="note")을 가로채 버린다.
+    설명이 섹션마다 흩어져 있으면 숫자가 눈에 안 들어온다 (굥 요청 2026-09-24)."""
+    def __init__(self):
+        self.notes = []
+        self._orig = None
+
+    def __enter__(self):
+        self._orig = st.markdown
+
+        def _md(body, *a, **k):
+            if isinstance(body, str) and body.lstrip().startswith('<p class="note"'):
+                self.notes.append(body)
+                return None
+            return self._orig(body, *a, **k)
+        st.markdown = _md
+        return self
+
+    def __exit__(self, *a):
+        st.markdown = self._orig
+        return False
+
+
 def detail(d, band=None, buy=None):
+    # 회색 설명 글은 화면에 내지 않는다 (굥 요청 2026-09-24: 지저분해서 숫자가 안 보임).
+    # 차트 색 설명(note keep)과 "검증 미통과 · 참고" 같은 짧은 딱지는 남는다.
+    with _NoteCatcher():
+        _detail_body(d, band, buy)
+
+
+def _detail_body(d, band=None, buy=None):
     st.markdown(f"### {d['ticker']}")
     st.caption(f"{d['name']}  ·  {d['sector'] or ''}")
+
+    # ── 회사 개요 ── (야후가 주는 그대로. 설명은 영어로 온다)
+    _meta = []
+    if d.get("industry"):
+        _meta.append(d["industry"])
+    if d.get("country"):
+        _meta.append(d["country"])
+    try:
+        if d.get("employees"):
+            _meta.append(f"직원 {int(float(d['employees'])):,}명")
+    except Exception:
+        pass
+    try:
+        _hd = holders(d["ticker"]) or {}
+    except Exception:
+        _hd = {}
+    if d.get("summary") or _meta or _hd:
+        with st.expander("회사 개요"):
+            import html as _h
+            if _meta:
+                st.markdown(f'<div style="font-size:.78rem;color:{CHARCOAL};'
+                            f'margin-bottom:6px">{" · ".join(_meta)}</div>',
+                            unsafe_allow_html=True)
+            if d.get("website"):
+                st.markdown(f'<div style="font-size:.72rem;margin-bottom:6px">'
+                            f'<a href="{d["website"]}" target="_blank">'
+                            f'{d["website"]}</a></div>', unsafe_allow_html=True)
+            if d.get("summary"):
+                import html as _h
+                try:
+                    _ko = translate_ko(d["summary"])
+                except Exception:
+                    _ko = None
+                _txt = _ko or d["summary"]
+                st.markdown(f'<div style="font-size:.74rem;line-height:1.6;'
+                            f'color:{CHARCOAL}">{_h.escape(_txt)}</div>',
+                            unsafe_allow_html=True)
+                if _ko:
+                    st.markdown(f'<div style="font-size:.64rem;color:{MUTED};'
+                                f'margin-top:4px">자동 번역</div>',
+                                unsafe_allow_html=True)
+            # 대주주 (야후. 기관 주주는 분기 보고라 한 달 반쯤 늦다)
+            if _hd:
+                _l = []
+                if _hd.get("insider_pct") is not None:
+                    _l.append(f"내부자 {_hd['insider_pct']:.1f}%")
+                if _hd.get("inst_pct") is not None:
+                    _l.append(f"기관 {_hd['inst_pct']:.1f}%")
+                if _hd.get("n_inst"):
+                    _l.append(f"기관 {_hd['n_inst']:,}곳")
+                _rows = []
+                for _h1 in (_hd.get("top") or []):
+                    _p = f"{_h1['pct']:.2f}%" if _h1.get("pct") is not None else "-"
+                    _rows.append(
+                        f'<div class="metric"><span class="mk">{_h.escape(_h1["name"])}</span>'
+                        f'<span class="mv">{_p}</span></div>')
+                _dt = next((x.get("date") for x in (_hd.get("top") or []) if x.get("date")), None)
+                st.markdown(
+                    f'<div style="font-size:.78rem;font-weight:700;color:{CHARCOAL};'
+                    f'margin:10px 0 4px">대주주</div>'
+                    + (f'<div style="font-size:.74rem;color:{CHARCOAL};margin-bottom:4px">'
+                       f'{" · ".join(_l)}</div>' if _l else "")
+                    + "".join(_rows)
+                    + (f'<div style="font-size:.64rem;color:{MUTED};margin-top:4px">'
+                       f'기관 보고일 {_dt}</div>' if _dt else ""),
+                    unsafe_allow_html=True)
+                st.markdown('<p class="note">야후 파이낸스가 주는 회사 설명(영어)입니다.</p>',
+                            unsafe_allow_html=True)
 
     if buy and d.get("price"):
         try:
