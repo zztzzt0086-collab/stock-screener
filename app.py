@@ -31,11 +31,13 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
+import pandas as pd
+from pools import index_members, INDEX_MEMBER_PAGES
 from core import (BUILD as CORE_BUILD,
                   TEN_MAX, LT_MAX, DAMO_MAX, AXES_TEN, AXES_LT,
                   score_damo, damo_verdict, yearly_series, implied_growth, RETIRED,
                   value_verdict, year_end_prices, news,
-                  filings, item_text, split_filings, translate_ko, holders,
+                  filings, item_text, split_filings, translate_ko, holders, cache,
                   YEARLY_AXES, YEARLY_TRI,
                   market_snapshot, vix_mood,
                   USD_KRW, chart_data, signal_state, signal_marks, SIGNALS,
@@ -47,7 +49,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-24 20:32"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-24 22:29"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -1386,12 +1388,18 @@ def _detail_body(d, band=None, buy=None):
         '<b>가정 없이 데이터만</b> — 재무 원본 · 삼각형 세 축 · 주가 · 공시 · 화살표(RSI)'
         '</p>', unsafe_allow_html=True)
 
+@cache(86400)
+def _idx_members(key):
+    """지수 편입 목록. 하루 저장. 빈 결과는 저장하지 않는다."""
+    return index_members(key)
+
+
 def main():
     stt = load_state()
     watch, bands = stt["tickers"], stt["bands"]
     buys = stt.setdefault("buys", {})     # 내 매수가 (수익률 표시용)
     market_bar()
-    tab1, tab2, tab3 = st.tabs(["대시보드", "종목 조회", "관심종목"])
+    tab1, tab2, tab3, tab4 = st.tabs(["대시보드", "종목 조회", "관심종목", "지수 종목"])
 
     with tab1:
         if not watch:
@@ -1588,6 +1596,52 @@ def main():
                     st.rerun()
                 except Exception:
                     st.error("붙여넣은 내용이 올바른 백업 형식이 아닙니다.")
+
+
+    with tab4:
+        # S&P 500 · 나스닥 100 편입 종목 둘러보기 (위키백과 표)
+        ik = st.radio("지수", list(INDEX_MEMBER_PAGES),
+                      format_func=lambda k: INDEX_MEMBER_PAGES[k][0],
+                      horizontal=True, key="idx_key")
+        with st.spinner("목록 불러오는 중"):
+            mem = _idx_members(ik) or []
+        if not mem:
+            st.warning("목록을 못 받았습니다. 잠시 뒤 다시 시도하세요.")
+        else:
+            q = st.text_input("검색", placeholder="티커나 회사 이름 (예: NVDA, micron)",
+                              key="idx_q").strip().lower()
+            secs = sorted({m["sector"] for m in mem if m.get("sector")})
+            sec = st.selectbox("섹터", ["전체"] + secs, key="idx_sec")
+            rows = [m for m in mem
+                    if (not q or q in m["ticker"].lower() or q in m["name"].lower())
+                    and (sec == "전체" or m.get("sector") == sec)]
+            st.markdown(f'<div style="font-size:.74rem;color:{MUTED};margin:2px 0 6px">'
+                        f'{len(rows)}개 · 전체 {len(mem)}개 · ★ = 관심종목</div>',
+                        unsafe_allow_html=True)
+            if rows:
+                df_ = pd.DataFrame([{"": "★" if m["ticker"] in watch else "",
+                                     "티커": m["ticker"], "회사": m["name"],
+                                     "섹터": m.get("sector", ""), "세부 업종": m.get("sub", "")}
+                                    for m in rows])
+                st.dataframe(df_, hide_index=True, use_container_width=True,
+                             height=min(420, 38 + 35 * len(df_)))
+                pick = st.selectbox("자세히 볼 종목",
+                                    ["선택하세요"] + [f'{m["ticker"]} · {m["name"]}' for m in rows],
+                                    key="idx_pick")
+                if pick != "선택하세요":
+                    t4 = pick.split(" · ")[0]
+                    with st.spinner("불러오는 중"):
+                        d4 = fetch(t4)
+                    if d4 is None:
+                        st.error("데이터를 찾을 수 없습니다.")
+                    else:
+                        if t4 not in watch:
+                            if st.button("관심종목에 추가", use_container_width=True,
+                                         key="idx_add"):
+                                stt["tickers"] = watch + [t4]
+                                save_state(stt)
+                                st.rerun()
+                        detail(d4, bands.get(t4), buys.get(t4))
 
 
 if gate():

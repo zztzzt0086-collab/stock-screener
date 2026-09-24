@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-24 21:57"
+BUILD = "2026-09-24 22:26"
 
 SCORE_VERSION = 2
 
@@ -82,11 +82,19 @@ def _is_empty(r):
 def _file_cache(ttl):
     """CLI 전용 디스크 캐시 데코레이터."""
     def deco(fn):
+        # 함수 코드가 바뀌면 캐시 이름도 바뀌게 한다 → 코드를 고치면 새로 받는다.
+        #   (전에는 매번 .cache 를 손으로 지워야 했다)
+        try:
+            import hashlib, inspect as _ins
+            ver = hashlib.md5(_ins.getsource(fn).encode("utf-8")).hexdigest()[:6]
+        except Exception:
+            ver = "0"
+
         def wrap(*a, **kw):
             # 키워드 인자도 받는다. 안 받으면 filings(t, kinds=[...]) 가 터진다.
             os.makedirs(CACHE_DIR, exist_ok=True)
             parts = list(map(str, a)) + [f"{k}={v}" for k, v in sorted(kw.items())]
-            key = f"{fn.__name__}_{'_'.join(parts)}".replace("/", "_")
+            key = f"{fn.__name__}_{ver}_{'_'.join(parts)}".replace("/", "_")
             p = os.path.join(CACHE_DIR, key + ".json")
             if os.path.exists(p) and time.time() - os.path.getmtime(p) < ttl:
                 try:
@@ -145,9 +153,11 @@ if _in_streamlit():
                 if _is_empty(r):
                     raise _NoCache(r)
                 return r
-            inner.__name__ = fn.__name__
-            inner.__qualname__ = fn.__qualname__
-            inner.__module__ = fn.__module__
+            # ★ 스트림릿은 '함수 코드' 로 캐시를 구분한다. 포장지(inner) 코드만 보이면
+            #   진짜 함수를 고쳐도 같은 함수로 알고 예전 결과를 계속 쓴다.
+            #   (2026-09-24: 개요·대주주가 안 나온 원인) → 진짜 함수 코드가 보이게 한다.
+            import functools
+            functools.update_wrapper(inner, fn)
             cached = st.cache_data(ttl=ttl, show_spinner=False)(inner)
 
             def outer(*a, **kw):
@@ -2096,10 +2106,10 @@ EDGAR_TAGS = {
               "PaymentsToAcquireProductiveAssets"],
     "intexp": ["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt"],
     "shares": ["WeightedAverageNumberOfDilutedSharesOutstanding"],
+    "divpaid": ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"],
     # 영업이익 줄을 표준 태그로 안 적는 해가 있다 (COHR 2025·2026 등) → 계산용
     "gp": ["GrossProfit"],
     "opex": ["OperatingExpenses"],
-    "costs": ["CostsAndExpenses"],
     # 결산일 하루의 값
     "eq": ["StockholdersEquity",
            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
@@ -2126,10 +2136,10 @@ EDGAR_INSTANT = {"eq", "cash", "sti", "debt_total", "debt_nc", "debt_cur", "debt
 def _edgar_pick(gaap, tags, instant, unit):
     """태그 후보들에서 결산일별 값을 고른다.
 
-    돌려주는 값: ({결산일: 값}, {결산일: 쓴 태그})
+    돌려주는 값: ({결산일: 값}, {결산일: 쓴 태그}, {결산일: 그 값이 실린 보고서 낸 날})
     """
     from datetime import date as _d
-    vals, used = {}, {}
+    vals, used, filed_at = {}, {}, {}
     for tag in tags:
         node = gaap.get(tag)
         if not node:
@@ -2158,11 +2168,12 @@ def _edgar_pick(gaap, tags, instant, unit):
             filed = r.get("filed") or ""
             if end not in best or filed > best[end][0]:
                 best[end] = (filed, r["val"])
-        for end, (_, v) in best.items():
+        for end, (fd, v) in best.items():
             if end not in vals:                     # 앞 순위 태그가 이미 있으면 그대로
                 vals[end] = v
                 used[end] = tag
-    return vals, used
+                filed_at[end] = fd
+    return vals, used, filed_at
 
 
 @cache(86400)
@@ -2201,10 +2212,11 @@ def edgar_annual(t, max_years=17):
             cur = "USD" if "USD" in u else next(iter(u))
             break
 
-    raw, tags = {}, {}
+    raw, tags, filed = {}, {}, {}
     for key, cands in EDGAR_TAGS.items():
         unit = "shares" if key == "shares" else cur
-        raw[key], tags[key] = _edgar_pick(gaap, cands, key in EDGAR_INSTANT, unit)
+        raw[key], tags[key], filed[key] = _edgar_pick(gaap, cands,
+                                                      key in EDGAR_INSTANT, unit)
 
     # 결산일 = 매출이나 순이익이 1년치로 잡힌 날
     ends = sorted(set(raw["rev"]) | set(raw["ni"]))
@@ -2232,16 +2244,26 @@ def edgar_annual(t, max_years=17):
     for end in ends[-max_years:]:
         y = {"end": end}
         for key in ("rev", "op", "ni", "pretax", "tax", "rnd", "ocf", "capex",
-                    "intexp", "shares"):
+                    "intexp", "shares", "divpaid"):
             y[key] = raw[key].get(end)
-        # 영업이익이 비면 계산해서 채우고 표시한다
+        # 주식 수가 실린 보고서를 낸 날 — 그 뒤의 액면분할만 곱해 맞추려고 남긴다
+        y["shares_filed"] = filed["shares"].get(end)
+        # 영업이익이 비면 매출총이익 − 영업비용으로 채우고 표시한다
+        #   ★ "매출 − 총비용" 은 쓰지 않는다. COHR 처럼 총비용에 이자·기타손익을
+        #     섞어 적는 회사는 그렇게 빼면 세전이익이 나온다 (2026-09-24 확인).
+        #   ★ 계산값이 세전이익 + 이자비용의 절반보다 작으면 이자가 섞였다는 뜻 → 버린다.
+        #     틀린 숫자를 채우느니 비워 두는 게 낫다.
         y["op_calc"] = False
         if y["op"] is None:
-            gp, ox, cs = (raw[k].get(end) for k in ("gp", "opex", "costs"))
+            gp, ox = raw["gp"].get(end), raw["opex"].get(end)
             if gp is not None and ox is not None:
-                y["op"], y["op_calc"] = gp - ox, True
-            elif y["rev"] is not None and cs is not None:
-                y["op"], y["op_calc"] = y["rev"] - cs, True
+                cand = gp - ox
+                ok = True
+                if y.get("pretax") is not None and y.get("intexp"):
+                    if cand < y["pretax"] + 0.5 * abs(y["intexp"]):
+                        ok = False
+                if ok:
+                    y["op"], y["op_calc"] = cand, True
         for key in ("eq", "cash", "sti", "temp_eq"):
             y[key] = _inst(key, end)
         tot, nc, cu, stb = (_inst(k, end) for k in
@@ -2255,8 +2277,222 @@ def edgar_annual(t, max_years=17):
         if y["capex"] is not None:
             y["capex"] = abs(y["capex"])
         years.append(y)
+
+    # 부채 태그를 한 해도 안 적었고 이자비용도 한 번도 없으면 → 빚이 없는 회사로 보고 0.
+    #   이자를 냈는데 부채 태그가 없으면 태그를 못 찾은 것이라 빈 칸 그대로 둔다
+    #   (그냥 0 으로 채우면 빚 있는 회사 점수가 부풀려진다).
+    debt_tags = ("debt_total", "debt_nc", "debt_cur", "debt_st")
+    no_debt_tag = all(not raw[k] for k in debt_tags)
+    no_interest = all(not y.get("intexp") for y in years)
+    for y in years:
+        y["debt_zero"] = False
+        if y.get("debt") is None and no_debt_tag and no_interest:
+            y["debt"], y["debt_zero"] = 0.0, True
     return {"entity": data.get("entityName"), "currency": cur,
             "years": years, "tags": tags}
+
+
+
+@cache(86400)
+def price_history_full(t):
+    """상장 이후 전체 일봉 종가(분할 반영)·배당·분할. 실패하면 빈 dict.
+
+    ★ 야후 과거 종가는 액면분할을 반영해 고쳐져 있다 (배당은 반영 안 한 Close).
+    """
+    try:
+        tk = yf.Ticker(t)
+        h = tk.history(period="max", auto_adjust=False)
+    except Exception:
+        return {}
+    if h is None or h.empty:
+        return {}
+    h = h.dropna(subset=["Close"])
+    out = {"close": {}, "div": {}, "split": {}}
+    for d_, v in zip(h.index, h["Close"]):
+        out["close"][str(pd.Timestamp(d_).date())] = float(v)
+    for name, key in (("dividends", "div"), ("splits", "split")):
+        try:
+            s_ = getattr(tk, name)
+            if s_ is not None and len(s_):
+                for d_, v in s_.items():
+                    if v:
+                        out[key][str(pd.Timestamp(d_).date())] = float(v)
+        except Exception:
+            pass
+    return out
+
+
+def edgar_year_inputs(t):
+    """해마다 채점 함수에 넣을 입력(d)을 만든다. 지금 채점 함수를 그대로 쓰기 위한 것.
+
+    돌려주는 값: [(결산일, d, 메모), ...]  오래된 순. 4년치가 모인 해부터.
+
+    ★ 그해 10-K 숫자 + 그해 결산일 주가만 쓴다. 지금 값은 섞지 않는다.
+    ★ 과거에 못 구하는 것은 비운다 → 채점 함수가 그 항목만 뺀다
+        insider(내부자 지분·지금 값뿐) · qmargin/qgrowth(분기 자료 없음)
+        peg(애널 추정치) → 채점 함수의 "PER ÷ 연평균 성장" 경로로 넘어간다
+    ★ 주식 수는 10-K 를 낸 날 이후의 액면분할만 곱해 지금 기준으로 맞춘다.
+      (분할 뒤에 낸 10-K 는 옛 연도 주식 수도 이미 고쳐 싣는다)
+    """
+    from datetime import date as _d, timedelta as _td
+    import bisect
+    e = edgar_annual(t)
+    ys = (e or {}).get("years") or []
+    if len(ys) < 4:
+        return []
+    ph = price_history_full(t) or {}
+    closes = ph.get("close") or {}
+    cdates = sorted(closes)
+    splits = sorted((ph.get("split") or {}).items())
+    divs = sorted((ph.get("div") or {}).items())
+
+    def px_on(day):                      # 그날 또는 그 전 마지막 종가 (10일 안)
+        if not cdates:
+            return None
+        k = bisect.bisect_right(cdates, day) - 1
+        if k < 0:
+            return None
+        try:
+            if (_d.fromisoformat(day) - _d.fromisoformat(cdates[k])).days > 10:
+                return None
+        except Exception:
+            return None
+        return closes[cdates[k]]
+
+    def px_max(a, b):                    # a~b 사이 최고 종가
+        i0 = bisect.bisect_left(cdates, a)
+        i1 = bisect.bisect_right(cdates, b)
+        seg = [closes[x] for x in cdates[i0:i1]]
+        return max(seg) if seg else None
+
+    def adj_shares(y):
+        s_ = y.get("shares")
+        if not s_:
+            return None
+        cut = y.get("shares_filed") or y["end"]
+        f = 1.0
+        for sd, r in splits:
+            if sd > cut and r > 0:
+                f *= r
+        return s_ * f
+
+    def ago(day, days):
+        return str(_d.fromisoformat(day) - _td(days=days))
+
+    def pct(a, b):
+        try:
+            return (a / b - 1) * 100 if (a is not None and b) else None
+        except Exception:
+            return None
+
+    fx = USD_KRW if (e.get("currency") or "USD") == "USD" else None
+    out = []
+    # 점수용 자기자본 = 10-K 자기자본 + 자본·부채 사이 우선주 등.
+    #   야후(지금 점수)가 이렇게 계산하므로 같은 기준이어야 과거→지금이 이어진다.
+    def eqx(w):
+        e_ = w.get("eq")
+        if e_ is None:
+            return None
+        return e_ + (w.get("temp_eq") or 0)
+    ys = [dict(w, eq=eqx(w)) for w in ys]
+
+    for k in range(3, len(ys)):
+        win = ys[k - 3:k + 1]
+        y, yp = ys[k], ys[k - 1]
+        end = y["end"]
+        p = px_on(end)
+        sh, shp = adj_shares(y), adj_shares(yp)
+        mcap = p * sh if (p and sh) else None
+
+        revs = [w["rev"] for w in win if w.get("rev")]
+        margins = [w["op"] / w["rev"] * 100 for w in win
+                   if w.get("op") is not None and w.get("rev")]
+        roes = [w["ni"] / w["eq"] * 100 for w in win
+                if w.get("ni") is not None and w.get("eq") and w["eq"] > 0]
+        fcfs = [w["ocf"] - (w.get("capex") or 0) for w in win
+                if w.get("ocf") is not None]
+        cagr = None
+        if len(revs) >= 2 and revs[0] > 0 and revs[-1] > 0:
+            cagr = ((revs[-1] / revs[0]) ** (1 / (len(revs) - 1)) - 1) * 100
+        shs = [adj_shares(w) for w in win]
+        shs = [s_ for s_ in shs if s_]
+        dil_annual = None
+        if len(shs) >= 2 and shs[0] > 0:
+            dil_annual = ((shs[-1] / shs[0]) ** (1 / (len(shs) - 1)) - 1) * 100
+
+        debt, eq = y.get("debt"), y.get("eq")
+        cash = (y.get("cash") or 0) + (y.get("sti") or 0)
+        netcash = cash - (debt or 0) if (y.get("cash") is not None or y.get("sti") is not None) else None
+        bv, bvp = (eq / sh if (eq and sh) else None), (yp.get("eq") / shp if (yp.get("eq") and shp) else None)
+
+        # 배당: 결산일 전 1년 합 ÷ 결산일 주가, 연속 증가 해 수 (지금 계산과 같은 방식)
+        dps = sum(v for d_, v in divs if ago(end, 365) < d_ <= end)
+        dy = dps / p * 100 if (p and dps) else None
+        yearly = {}
+        for d_, v in divs:
+            if d_ <= end:
+                yearly[d_[:4]] = yearly.get(d_[:4], 0) + v
+        vals_ = [yearly[x] for x in sorted(yearly)]
+        n = 0
+        for i in range(len(vals_) - 1, 0, -1):
+            if vals_[i] > vals_[i - 1]:
+                n += 1
+            else:
+                break
+
+        d = {
+            "revs": revs, "margins": margins, "roes": roes, "fcfs": fcfs,
+            "cagr": cagr, "growth": cagr,
+            "margin": (y["op"] / y["rev"] * 100) if (y.get("op") is not None and y.get("rev")) else None,
+            "roe": (y["ni"] / eq * 100) if (y.get("ni") is not None and eq and eq > 0) else None,
+            "debt": (debt / eq * 100) if (debt is not None and eq and eq > 0) else None,
+            "debt_asof": f"연간 {end}",
+            "debt_chg": pct(debt, yp.get("debt")),
+            "ocf": y.get("ocf"), "ni": y.get("ni"),
+            "ocf_last": y.get("ocf"), "capex_last": y.get("capex"),
+            "fcf_last": (y["ocf"] - (y.get("capex") or 0)) if y.get("ocf") is not None else None,
+            "capex_chg": pct(y.get("capex"), yp.get("capex")),
+            "cover": (y["op"] / abs(y["intexp"])) if (y.get("op") is not None and y.get("intexp")) else None,
+            "netcash": netcash, "netcash_note": None,
+            "rnd": (y["rnd"] / y["rev"] * 100) if (y.get("rnd") is not None and y.get("rev")) else None,
+            "dilution": pct(sh, shp), "dil_annual": dil_annual,
+            "bvps_chg": pct(bv, bvp),
+            "rev1y": pct(y.get("rev"), yp.get("rev")),
+            "px1y": pct(p, px_on(ago(end, 365))),
+            "dd": (p / px_max(ago(end, 730), end) - 1) * 100 if (p and px_max(ago(end, 730), end)) else None,
+            "mcap_fin": mcap, "mcap_raw": mcap,
+            "mcap_krw": mcap * fx if (mcap and fx) else None,
+            "per": (mcap / y["ni"]) if (mcap and y.get("ni") and y["ni"] > 0) else None,
+            "peg": None,                 # 과거 애널 추정치 없음 → PER÷연평균 성장 경로
+            "insider": None,             # 지금 값뿐
+            "qmargin": [], "qgrowth": [],  # 분기 자료 없음
+            "beats": None,
+            "dy": dy, "div_yrs": n if n else None,
+        }
+        memo = {"price": p, "mcap": mcap, "shares_adj": sh}
+        out.append((end, d, memo))
+    return out
+
+
+def edgar_year_scores(t):
+    """해마다 성장·장기 점수. 지금 채점 함수를 그대로 쓴다.
+
+    돌려주는 값: [{"end", "ten", "lt", "n_ten", "n_lt", "items_ten", "items_lt",
+                  "d", "memo"}, ...]  오래된 순
+    """
+    rows = []
+    for end, d, memo in edgar_year_inputs(t):
+        try:
+            it10, itlt = score_ten(d), score_lt(d)
+            _, _, p10 = pctile(it10, TEN_MAX)
+            _, _, plt = pctile(itlt, LT_MAX)
+        except Exception:
+            continue
+        rows.append({"end": end, "ten": p10, "lt": plt,
+                     "n_ten": sum(1 for x in it10 if x[1] is not None),
+                     "n_lt": sum(1 for x in itlt if x[1] is not None),
+                     "items_ten": it10, "items_lt": itlt, "d": d, "memo": memo})
+    return rows
 
 
 @cache(1800)
@@ -2414,34 +2650,66 @@ def holders(t, n=5):
     return out
 
 
+# 번역기가 막혔을 때 잠깐 쉬게 하는 시각 (같은 프로그램이 도는 동안만 기억)
+_TR_REST = {"google": 0.0}
+
+
+def _tr_chunks(text, limit):
+    """문장 단위로 끊어 limit 글자 이하 덩어리로."""
+    t = str(text).replace("\n", " ").strip()
+    out, cur = [], ""
+    for sent in t.split(". "):
+        piece = (sent if sent.endswith(".") else sent + ".") + " "
+        while len(piece) > limit:                 # 한 문장이 너무 길면 자른다
+            out.append(piece[:limit]); piece = piece[limit:]
+        if len(cur) + len(piece) > limit and cur:
+            out.append(cur); cur = ""
+        cur += piece
+    if cur.strip():
+        out.append(cur)
+    return [x.strip() for x in out if x.strip()]
+
+
 @cache(604800)
 def translate_ko(text):
     """영어 → 한국어 자동 번역. 실패하면 None (화면은 영어 원문을 보여 준다).
 
-    ★ deep-translator 로 구글 번역을 부른다. 키가 필요 없는 대신 공식 서비스가
-      아니라 가끔 막히거나 바뀔 수 있다. 한 번 번역한 건 일주일 저장한다.
+    ★ 무료 번역기라 막힐 때가 있다.
+      1) 구글 번역 — 막히면(요청 과다) 30분 동안 다시 안 부른다
+      2) MyMemory — 구글이 안 될 때. 이름 없이 쓰면 하루 5,000자까지
+    ★ 한 번 번역한 건 일주일 저장한다.
     """
+    import time as _t
     if not text:
         return None
     try:
-        from deep_translator import GoogleTranslator
+        import deep_translator as _dt
     except Exception:
         return None
+
+    # 1) 구글
+    if _t.time() >= _TR_REST["google"]:
+        try:
+            gt = _dt.GoogleTranslator(source="auto", target="ko")
+            out = [gt.translate(ch) for ch in _tr_chunks(text, 4500)]
+            res = " ".join(x for x in out if x)
+            if res:
+                return res
+        except Exception as e:
+            if "TooManyRequests" in type(e).__name__ or "too many" in str(e).lower():
+                _TR_REST["google"] = _t.time() + 1800
+
+    # 2) MyMemory (한 번에 500자까지)
     try:
-        t = str(text).strip()
-        # 한 번에 5,000자까지. 넘으면 문장 단위로 잘라 여러 번 보낸다.
-        chunks, cur = [], ""
-        for sent in t.replace("\n", " ").split(". "):
-            piece = (sent if sent.endswith(".") else sent + ".") + " "
-            if len(cur) + len(piece) > 4500:
-                chunks.append(cur)
-                cur = ""
-            cur += piece
-        if cur.strip():
-            chunks.append(cur)
-        gt = GoogleTranslator(source="auto", target="ko")
-        out = [gt.translate(ch.strip()) for ch in chunks if ch.strip()]
-        res = " ".join(x for x in out if x)
+        mm = _dt.MyMemoryTranslator(source="en-GB", target="ko-KR")
+        out = []
+        for ch in _tr_chunks(text, 450):
+            r = mm.translate(ch)
+            # 한도가 차면 번역문 자리에 경고문을 돌려준다 → 실패로 본다
+            if not r or "MYMEMORY WARNING" in r.upper() or "QUERY LENGTH LIMIT" in r.upper():
+                return None
+            out.append(r)
+        res = " ".join(out)
         return res or None
     except Exception:
         return None

@@ -324,3 +324,91 @@ def fetch_all_listed(which="nasdaq"):
         pass
     return out
 
+
+# ─────────────────────────────────────────────────────────────
+# 지수 편입 종목 — 티커 + 회사명 + 섹터 (앱 「지수 종목」 탭용)
+#   pool_from_wiki 는 티커만 준다. 여기서는 표의 회사명·섹터 열도 같이 가져온다.
+# ─────────────────────────────────────────────────────────────
+
+INDEX_MEMBER_PAGES = {
+    "sp500": ("S&P 500", "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"),
+    "nasdaq100": ("나스닥 100", "https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies"),
+}
+
+
+def index_members(key):
+    """지수 편입 종목 목록. [{"ticker","name","sector","sub"}, ...]. 실패하면 [].
+
+    ★ 위키백과 표를 읽는다. 일주일 저장해 두고 재사용한다.
+    ★ 티커의 점은 야후 형식에 맞춰 하이픈으로 바꾼다 (BRK.B → BRK-B).
+    """
+    import json, os, re, time, urllib.request
+    from io import StringIO
+    if key not in INDEX_MEMBER_PAGES:
+        return []
+    _, url = INDEX_MEMBER_PAGES[key]
+    p = _wiki_cache_path(url + "#members")
+    if os.path.exists(p) and time.time() - os.path.getmtime(p) < WIKI_TTL:
+        try:
+            with open(p, encoding="utf-8") as f:
+                cached = json.load(f)
+            if cached:
+                return cached
+        except Exception:
+            pass
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/124.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            html = r.read().decode("utf-8", "replace")
+        tables = pd.read_html(StringIO(html))
+    except Exception:
+        return []
+
+    def _clean(v):
+        v = re.sub(r"[\u200b\u200c\u200d\u00ad\ufeff\u00a0\s]", "", str(v))
+        return re.sub(r"\[.*?\]", "", v).strip()
+
+    def _col(cols, *cands):
+        low = {str(c).strip().lower(): c for c in cols}
+        for cd in cands:
+            for lc, c in low.items():
+                if cd in lc:
+                    return c
+        return None
+
+    best = []
+    for t in tables:
+        cols = list(t.columns)
+        c_t = _col(cols, "symbol", "ticker")
+        c_n = _col(cols, "security", "company", "name")
+        c_s = _col(cols, "gics sector", "sector", "icb industry", "industry")
+        c_u = _col(cols, "gics sub-industry", "sub-industry", "subsector", "icb subsector")
+        if c_t is None or c_n is None:
+            continue
+        rows = []
+        for _, r in t.iterrows():
+            tk = _clean(r[c_t]).replace(".", "-").upper()
+            if not tk or len(tk) > 6 or not tk.replace("-", "").isalpha():
+                continue
+            rows.append({"ticker": tk,
+                         "name": str(r[c_n]).strip(),
+                         "sector": (str(r[c_s]).strip() if c_s is not None and str(r[c_s]) != "nan" else ""),
+                         "sub": (str(r[c_u]).strip() if c_u is not None and str(r[c_u]) != "nan" else "")})
+        seen, uniq = set(), []                  # 같은 티커 두 번 나오면 한 번만
+        for r_ in rows:
+            if r_["ticker"] not in seen:
+                seen.add(r_["ticker"]); uniq.append(r_)
+        if len(uniq) > len(best):
+            best = uniq
+    if len(best) < 20:
+        return []
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(best, f, ensure_ascii=False)
+    except Exception:
+        pass
+    return best
