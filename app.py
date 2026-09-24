@@ -47,7 +47,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-23 22:44"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-24 00:05"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -62,6 +62,17 @@ st.markdown(f"""<style>
 .stApp [data-baseweb="tab"] p {{color:#2F3437 !important;}}
 .stApp button {{background:#FFFFFF; color:#2F3437; border:1px solid #D1D5DB;}}
 .stApp [data-testid="stExpander"] {{background:#FFFFFF;}}
+/* 위에서 글씨를 진회색으로 고정했더니 배지·배너 안의 흰 글씨까지 덮였다.
+   흰 글씨가 필요한 곳은 다시 흰색으로 (안쪽 글자까지). */
+.stApp .badge, .stApp .badge * ,
+.stApp .dday, .stApp .dday * ,
+.stApp .entry, .stApp .entry * {{color:#FFFFFF !important;}}
+/* 클래스로 정한 글씨 색도 위 규칙에 덮였다. 앞에 .stApp 을 붙여 되살린다. */
+.stApp .tkr, .stApp .px, .stApp .mv, .stApp h1, .stApp h2, .stApp h3 {{color:{CHARCOAL};}}
+.stApp .nm, .stApp .mk, .stApp .note {{color:{MUTED};}}
+.stApp .up {{color:#DC2626;}}
+.stApp .dn {{color:#2563EB;}}
+.stApp .sect {{color:{ORANGE};}}
 .block-container {{padding:1rem 1rem 3rem;max-width:720px;}}
 h1,h2,h3 {{color:{CHARCOAL};font-weight:700;}}
 .card {{background:#fff;border:1px solid #E4E4E7;border-radius:10px;
