@@ -333,6 +333,7 @@ def fetch_all_listed(which="nasdaq"):
 INDEX_MEMBER_PAGES = {
     "sp500": ("S&P 500", "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"),
     "nasdaq100": ("나스닥 100", "https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies"),
+    "kospi200": ("코스피 200", "https://finance.naver.com/sise/entryJongmok.naver?type=KPI200"),
 }
 
 
@@ -346,6 +347,15 @@ def index_members(key):
     from io import StringIO
     if key not in INDEX_MEMBER_PAGES:
         return []
+    if key == "kospi200":
+        # 구성은 네이버, 업종·주요제품은 KIND 에서 붙인다 (KIND 가 막히면 업종 빈칸)
+        k200 = kospi200_list()
+        if not k200:
+            return []
+        info = {x["code"]: x for x in kr_listing("kospi")}
+        return [{"ticker": c + ".KS", "name": n,
+                 "sector": info.get(c, {}).get("industry", ""),
+                 "sub": info.get(c, {}).get("products", "")} for c, n in k200]
     _, url = INDEX_MEMBER_PAGES[key]
     p = _wiki_cache_path(url + "#members")
     if os.path.exists(p) and time.time() - os.path.getmtime(p) < WIKI_TTL:
@@ -412,3 +422,157 @@ def index_members(key):
     except Exception:
         pass
     return best
+
+
+# ═════════════════════════════════════════════════════════════
+# 한국 — 코스피 200 · 코스피/코스닥 전체 (업종 붙여서)
+#   코스피 200 구성: 네이버 금융 편입 종목 페이지 (10개씩 20쪽)
+#   업종·주요제품: 한국거래소 KIND 상장법인 목록 (로그인 없이 받는 공개 목록)
+#   야후 티커: 코스피 .KS · 코스닥 .KQ
+# ═════════════════════════════════════════════════════════════
+
+KIND_URL = ("https://kind.krx.co.kr/corpgeneral/corpList.do?method=download"
+            "&searchType=13&marketType={m}")
+NAVER_K200 = "https://finance.naver.com/sise/entryJongmok.naver?type=KPI200&page={p}"
+
+# 한국 업종 묶음 — KIND 업종 이름(한글)에 이 말이 들어가면 해당
+KR_INDUSTRY_PRESETS = {
+    "semi":  ["반도체", "전자부품", "인쇄회로", "전자집적회로"],
+    "ai":    ["소프트웨어", "컴퓨터 프로그래밍", "시스템 통합", "자료처리", "호스팅",
+              "포털", "정보서비스"],
+    "power": ["전동기", "발전기", "전기 변환", "전기공급", "전기 공급", "절연선",
+              "케이블", "축전지", "전지", "변압기", "전기장비"],
+    "robot": ["로봇", "특수 목적용 기계", "일반 목적용 기계", "측정", "시험",
+              "제어", "정밀기기"],
+    "comm":  ["통신 및 방송 장비", "컴퓨터 및 주변장치", "영상 및 음향기기"],
+    "bio":   ["의약품", "의약물질", "생물학적", "의료용", "의료기기"],
+}
+KR_INDUSTRY_PRESETS["ours"] = (KR_INDUSTRY_PRESETS["semi"] + KR_INDUSTRY_PRESETS["ai"]
+                               + KR_INDUSTRY_PRESETS["power"] + KR_INDUSTRY_PRESETS["robot"]
+                               + KR_INDUSTRY_PRESETS["comm"])
+# 업종은 기계인데 주요제품이 반도체 장비인 회사(장비주)를 놓치지 않도록, 주요제품에서도 찾는 말
+KR_PRODUCT_WORDS = ["반도체", "웨이퍼", "HBM"]
+
+
+def _http_get(url, enc=None, timeout=30):
+    """브라우저처럼 받아 온다. enc 를 주면 그 인코딩으로 푼다 (한국 사이트는 cp949)."""
+    import urllib.request
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        "Referer": url.split("/", 3)[0] + "//" + url.split("/", 3)[2] + "/"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+    for e in ([enc] if enc else []) + ["utf-8", "cp949"]:
+        try:
+            return raw.decode(e)
+        except Exception:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
+def _kr_cache(key, loader, min_len):
+    """일주일 저장. 너무 적게 받아졌으면(깨진 응답) 저장하지 않는다."""
+    import json, os, time
+    pth = _wiki_cache_path(key)
+    if os.path.exists(pth) and time.time() - os.path.getmtime(pth) < WIKI_TTL:
+        try:
+            with open(pth, encoding="utf-8") as f:
+                got = json.load(f)
+            if len(got) >= min_len:
+                return got
+        except Exception:
+            pass
+    try:
+        got = loader()
+    except Exception:
+        got = []
+    if len(got) >= min_len:
+        try:
+            with open(pth, "w", encoding="utf-8") as f:
+                json.dump(got, f, ensure_ascii=False)
+        except Exception:
+            pass
+        return got
+    return []
+
+
+def _kr_code(v):
+    s = str(v).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s.zfill(6) if s.isdigit() else s.upper()
+
+
+def kr_listing(market="kospi"):
+    """코스피/코스닥 상장사 전체. [{"ticker","code","name","industry","products","market"}].
+    실패하면 []. 스팩(기업인수목적회사)은 뺀다."""
+    from io import StringIO
+    m = {"kospi": "stockMkt", "kosdaq": "kosdaqMkt"}[market]
+    suf = ".KS" if market == "kospi" else ".KQ"
+    url = KIND_URL.format(m=m)
+
+    def load():
+        html = _http_get(url, "cp949")
+        tables = pd.read_html(StringIO(html), header=0)
+        if not tables:
+            return []
+        t = max(tables, key=len)
+        cols = {str(c).strip(): c for c in t.columns}
+        def col(*names):
+            for n in names:
+                for k, c in cols.items():
+                    if n in k:
+                        return c
+            return None
+        c_name, c_code = col("회사명", "종목명"), col("종목코드", "코드")
+        c_ind, c_prod = col("업종"), col("주요제품")
+        if c_name is None or c_code is None:
+            return []
+        out = []
+        for _, r in t.iterrows():
+            name = str(r[c_name]).strip()
+            code = _kr_code(r[c_code])
+            if not code or "스팩" in name or "기업인수목적" in name:
+                continue
+            ind = str(r[c_ind]).strip() if c_ind is not None and str(r[c_ind]) != "nan" else ""
+            prod = str(r[c_prod]).strip() if c_prod is not None and str(r[c_prod]) != "nan" else ""
+            out.append({"ticker": code + suf, "code": code, "name": name,
+                        "industry": ind, "products": prod, "market": market})
+        return out
+
+    return _kr_cache(url, load, 100)
+
+
+def kospi200_list():
+    """코스피 200 구성 종목 [(code, name)]. 네이버 편입 종목 페이지를 넘기며 모은다."""
+    import re
+
+    def load():
+        seen, out = set(), []
+        for pg in range(1, 30):
+            html = _http_get(NAVER_K200.format(p=pg), "cp949")
+            got = re.findall(r'code=([0-9A-Z]{6})"[^>]*>\s*([^<]+?)\s*</a>', html)
+            new = [(c, n) for c, n in got if c not in seen]
+            if not new:
+                break
+            for c, n in new:
+                seen.add(c)
+                out.append([c, n])
+        return out
+
+    got = _kr_cache(NAVER_K200, load, 150)
+    return [tuple(x) for x in got]
+
+
+def kr_match(item, key):
+    """한국 종목이 업종 묶음(또는 쉼표로 적은 말)에 드는가."""
+    key = (key or "").strip().lower()
+    words = KR_INDUSTRY_PRESETS.get(key) or [w.strip() for w in key.split(",") if w.strip()]
+    ind, prod = item.get("industry", ""), item.get("products", "")
+    if any(w and w in ind for w in words):
+        return True
+    if key in ("semi", "ours") and any(w in prod for w in KR_PRODUCT_WORDS):
+        return True
+    return False
