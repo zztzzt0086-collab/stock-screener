@@ -44,7 +44,7 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-24 22:26"
+BUILD = "2026-09-25 07:19"
 
 SCORE_VERSION = 2
 
@@ -275,15 +275,67 @@ def _numify(d, keys):
       옛 snapshot.json 을 읽을 때도 같은 일이 생긴다.
       채점 함수 앞에서 한 번 걸러 둔다.
     """
+    import math
     for k in keys:
         v = d.get(k)
-        if v is None or isinstance(v, (int, float)):
+        if v is None:
+            continue
+        if isinstance(v, (int, float)):
+            # NaN·무한대는 '값 있음' 으로 잘못 읽힌다 (bool(nan) 은 True) → 빈칸
+            if isinstance(v, float) and not math.isfinite(v):
+                d[k] = None
             continue
         try:
-            d[k] = float(str(v).replace(",", "").strip())
+            f = float(str(v).replace(",", "").strip())
+            d[k] = f if math.isfinite(f) else None
         except Exception:
             d[k] = None
     return d
+
+
+def _numify_lists(d, keys):
+    """목록 안의 값도 숫자로. 못 바꾸는 값은 뺀다 (sum·min 이 글자에서 터지지 않게)."""
+    for k in keys:
+        v = d.get(k)
+        if not isinstance(v, (list, tuple)):
+            continue
+        import math
+        out = []
+        for x in v:
+            if isinstance(x, (int, float)):
+                if not (isinstance(x, float) and not math.isfinite(x)):
+                    out.append(x)
+                continue
+            try:
+                f = float(str(x).replace(",", "").strip())
+                if math.isfinite(f):
+                    out.append(f)
+            except Exception:
+                pass
+        d[k] = out
+    return d
+
+
+_SCORE_LISTKEYS = ("revs", "margins", "roes", "fcfs", "qgrowth", "qmargin",
+                   "shares_hist", "y_growth", "y_margin", "y_debt", "y_roic", "y_fcfm")
+
+
+def _clean_inputs(fn):
+    """점수 함수 앞에서 입력을 청소하는 겉싸개.
+
+    ★ 점수 함수 본문을 고치면 채점 지문이 바뀌어 verify 기록이 갈린다.
+      그래서 본문은 그대로 두고 바깥에서 감싼다. functools.wraps 로 감싸면
+      inspect.getsource 가 원래 본문을 보므로 지문도 그대로다.
+    """
+    import functools
+
+    @functools.wraps(fn)
+    def w(d, *a, **k):
+        if isinstance(d, dict):
+            _numify(d, _SCORE_NUMKEYS)
+            _numify_lists(d, _SCORE_LISTKEYS)
+        return fn(d, *a, **k)
+    return w
 
 
 # 채점 함수가 숫자로 쓰는 키 전부.
@@ -686,6 +738,12 @@ def score_damo(d, wacc=None):
 #   다모다란이 implied growth 라 부르는 것이다.
 # ═════════════════════════════════════════════════════════════
 
+
+# 입력 청소 겉싸개 (본문·지문은 그대로)
+score_ten = _clean_inputs(score_ten)
+score_lt = _clean_inputs(score_lt)
+score_damo = _clean_inputs(score_damo)
+
 def dcf_value(rev0, growth, margin, reinvest, tax, wacc, terminal, years=10):
     """가정을 넣어 기업가치를 계산한다. (내부용)
 
@@ -878,6 +936,13 @@ def _scale(v, lo, hi, invert=False):
     """값을 0~100 으로. invert 면 낮을수록 높은 점수."""
     if v is None:
         return None
+    if not isinstance(v, (int, float)):
+        try:
+            v = float(str(v).replace(",", "").strip())
+        except Exception:
+            return None
+    if v != v or v in (float("inf"), float("-inf")):      # NaN·무한대
+        return None
     x = (v - lo) / (hi - lo) * 100
     x = max(0.0, min(100.0, x))
     return 100 - x if invert else x
@@ -926,6 +991,27 @@ def yearly_series(d):
 
     return {"years": yrs, "raw": raw, "score": score, "best": best}
 
+
+
+
+def tri_path(d):
+    """연도별 삼각형 넓이. 앱 삼각형(크고 있나·잘 버나·빚은 없나)과 같은 환산을 쓴다.
+
+    돌려주는 값: [(연도, 넓이 0~100, (성장, 이익률, 부채) 환산점수), ...]
+      세 축이 다 있는 해만. 세 축이 모두 100 이면 넓이 100.
+    넓이 = (r1·r2 + r2·r3 + r3·r1) / 3  (세 축이 120° 간격인 삼각형 넓이를 0~100 으로)
+    """
+    ys = yearly_series(d)
+    if not ys:
+        return []
+    out = []
+    for i, yr in enumerate(ys["years"]):
+        r = [ys["score"][k][i] for k in YEARLY_TRI]
+        if any(x is None for x in r):
+            continue
+        a, b, c = (x / 100 for x in r)
+        out.append((yr, (a * b + b * c + c * a) / 3 * 100, tuple(r)))
+    return out
 
 
 def score_fingerprint():
@@ -1163,6 +1249,9 @@ def value_verdict(d, px_hist=None, g_implied=None):
     경계는 하나로 정하지 않고 후보 여럿을 같이 돌려준다.
     6개월 뒤 어느 경계가 맞았는지 보고 고르기 위함이다.
     """
+    if isinstance(d, dict):                  # 글자가 섞여 와도 안 터지게
+        _numify(d, _SCORE_NUMKEYS)
+        _numify_lists(d, _SCORE_LISTKEYS)
     vb = value_band(d, px_hist)
     cagr = d.get("cagr")
 
@@ -1174,11 +1263,16 @@ def value_verdict(d, px_hist=None, g_implied=None):
     #     MU 는 최근 2년 평균이 51%(꼭지)라 기대 성장률이 낮게 나온다.
     #     그래서 정상화 이익률로 다시 역산한다.
     nm_ = vb.get("norm_margin")
+    used_m = None                        # 실제로 거꾸로 계산에 쓴 이익률 (%)
+    if nm_ is not None and nm_ <= 0:
+        # 과거 평균이 적자면 그걸로는 어떤 성장률도 주가를 설명 못 한다 → 다시 계산 안 함
+        reasons.append(f"과거 4년 평균 이익률이 {nm_:.0f}% (적자)라 최근 이익률로 계산했다")
     if nm_ is not None and nm_ > 0:
         try:
             g2, _, _ = implied_growth(d, margin=nm_ / 100)
             if g2 is not None:
                 g_implied = g2
+                used_m = nm_
                 reasons.append(f"과거 4년 평균 이익률 {nm_:.0f}% 로 다시 계산했다")
         except Exception:
             pass
@@ -1240,7 +1334,9 @@ def value_verdict(d, px_hist=None, g_implied=None):
             # 화면이 같은 값을 쓰도록 실제 쓴 것을 돌려준다.
             # 화면이 따로 계산하면 "30%p 높다" 와 "23%p 낮다" 가 같이 나온다.
             "implied_g": g_implied,
-            "used_margin": nm_,
+            # 실제로 쓴 이익률만 돌려준다. 다시 계산 안 했으면 None →
+            # 화면은 처음 계산의 이익률을 쓴다 (전엔 여기서 -8% 같은 엉뚱한 이름표가 붙었다)
+            "used_margin": used_m,
             "band_pct": bp, "band_n": vb.get("band_n"),
             "basis": vb.get("basis"), "norm_margin": vb.get("norm_margin"),
             "norm_per": vb.get("norm_per"), "cur_per": vb.get("cur_per"),
@@ -2559,8 +2655,12 @@ def filings(t, n=10, kinds=None, all_forms=False):
     # 중요 공시를 앞으로, 임원 매매를 뒤로
     main = [x for x in out if not _is_noise(x["form"])]
     insider = [x for x in out if _is_noise(x["form"])]
-    if kinds or all_forms:
+    if kinds:
         return out[:n]
+    if all_forms:
+        # --all: 중요 공시는 그대로 n 건 + 임원 매매는 넉넉히.
+        #   (전엔 최근 n 건만 잘라서, 임원 매매가 몰린 주엔 8-K·10-Q 가 통째로 밀려났다)
+        return main[:n] + insider[:max(n * 3, 30)]
     # 중요한 것 n 건 + 임원 매매 몇 건
     return main[:n] + insider[:max(0, n - len(main[:n])) or 3]
 
