@@ -49,7 +49,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-24 22:29"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-25 09:06"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -1044,6 +1044,27 @@ class _NoteCatcher:
         return False
 
 
+
+def _news_row(it):
+    """뉴스 한 줄 HTML. 제목은 구글 번역을 거쳐 한국어로, 옆에 '원문' 링크."""
+    from urllib.parse import quote as _q
+    import html as _h
+    meta = " · ".join(x for x in (it.get("source"), it.get("ago")) if x)
+    t_ = _h.escape(it.get("title") or "")
+    orig_a = ""
+    if it.get("link"):
+        tr = ("https://translate.google.com/translate?sl=auto&tl=ko&hl=ko&u="
+              + _q(it["link"], safe=""))
+        t_ = (f'<a href="{_h.escape(tr)}" target="_blank" '
+              f'style="color:{CHARCOAL};text-decoration:none">{t_}</a>')
+        orig_a = (f' · <a href="{_h.escape(it["link"])}" target="_blank" '
+                  f'style="color:{MUTED};text-decoration:underline">원문</a>')
+    return (f'<div style="padding:7px 0;border-bottom:1px solid #F1F1F2">'
+            f'<div style="font-size:.8rem;line-height:1.35">{t_}</div>'
+            f'<div style="font-size:.66rem;color:{MUTED};margin-top:2px">'
+            f'{meta}{orig_a}</div></div>')
+
+
 def detail(d, band=None, buy=None):
     # 회색 설명 글은 화면에 내지 않는다 (굥 요청 2026-09-24: 지저분해서 숫자가 안 보임).
     # 차트 색 설명(note keep)과 "검증 미통과 · 참고" 같은 짧은 딱지는 남는다.
@@ -1331,18 +1352,7 @@ def _detail_body(d, band=None, buy=None):
                     + '</p>', unsafe_allow_html=True)
     if nl:
         st.markdown('<div class="sect">뉴스</div>', unsafe_allow_html=True)
-        rows_n = []
-        for it in nl:
-            meta = " · ".join(x for x in (it.get("source"), it.get("ago")) if x)
-            t_ = it["title"]
-            if it.get("link"):
-                t_ = (f'<a href="{it["link"]}" target="_blank" '
-                      f'style="color:{CHARCOAL};text-decoration:none">{t_}</a>')
-            rows_n.append(
-                f'<div style="padding:7px 0;border-bottom:1px solid #F1F1F2">'
-                f'<div style="font-size:.8rem;line-height:1.35">{t_}</div>'
-                f'<div style="font-size:.66rem;color:{MUTED};margin-top:2px">'
-                f'{meta}</div></div>')
+        rows_n = [_news_row(it) for it in nl]
         st.markdown("".join(rows_n), unsafe_allow_html=True)
         st.markdown('<p class="note">야후에서 가져온 제목입니다. '
                     '좋은지 나쁜지는 안 봅니다.</p>',

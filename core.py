@@ -44,9 +44,9 @@ for _n in ("yfinance", "yfinance.data", "yfinance.utils", "peewee", "urllib3"):
 #                    자동으로 빠진다. 실험 기준점을 다시 찍어야 한다.
 # ═════════════════════════════════════════════════════════════
 # 파일이 언제 만들어진 것인지. 옛 파일을 쓰고 있는지 바로 알려고 둔다.
-BUILD = "2026-09-25 07:19"
+BUILD = "2026-09-25 07:25"
 
-SCORE_VERSION = 2
+SCORE_VERSION = 3
 
 USD_KRW = 1380
 
@@ -281,13 +281,16 @@ def _numify(d, keys):
         if v is None:
             continue
         if isinstance(v, (int, float)):
-            # NaN·무한대는 '값 있음' 으로 잘못 읽힌다 (bool(nan) 은 True) → 빈칸
-            if isinstance(v, float) and not math.isfinite(v):
+            # NaN 만 빈칸으로. NaN 은 '값 있음' 으로 잘못 읽히고(bool(nan) 은 True)
+            # 비교가 전부 거짓이라 설명 글을 만들다 터진다.
+            # ★ 무한대(PER inf 등)는 그대로 둔다. 원래 채점이 그 값으로 점수를 매겨 왔고,
+            #   빈칸으로 바꾸면 지문은 같은데 점수만 조용히 달라진다 (ZETA 로 확인).
+            if isinstance(v, float) and v != v:
                 d[k] = None
             continue
         try:
             f = float(str(v).replace(",", "").strip())
-            d[k] = f if math.isfinite(f) else None
+            d[k] = None if f != f else f
         except Exception:
             d[k] = None
     return d
@@ -403,15 +406,25 @@ def score_ten(d):
     g_ok = (bool(g) and 0 < g <= 80
             and not (bool(peg) and peg <= 0.2))
 
+    # ★ SCORE_VERSION 3 (2026-09-25): PER 100배 넘으면 PEG·성장 대비로 싸 보여도 최대 3점.
+    #   이익이 바닥이거나 주식보상비가 커서 회계상 이익이 작으면 PER 이 수백 배로 튀는데,
+    #   그래도 PEG 가 낮게 잡혀 밸류에이션 만점을 받았다 (BE PER 346·PEG 0.62 → 10점).
+    #   1,004종목 미리보기(pegcheck): 60배면 73개(멀쩡한 성장주까지), 100배면 33개가 걸렸다.
+    #   ★ 100 은 미리보기를 보고 정한 경계다. 맞는지는 검증되지 않았다.
+    #   한계: 인수 무형자산 상각으로 회계 이익이 작은 회사(AMD 등)도 같이 걸린다.
+    hi_per = bool(per) and per > 100
     if peg_ok:
-        o.append(("밸류에이션", 10 if peg < 1 else 8 if peg < 1.5 else 5 if peg < 2.5
-                  else 2 if peg < 4 else 0, f"PEG {peg:.2f}"))
+        v_ = 10 if peg < 1 else 8 if peg < 1.5 else 5 if peg < 2.5 else 2 if peg < 4 else 0
+        o.append(("밸류에이션", min(v_, 3) if hi_per else v_,
+                  f"PEG {peg:.2f}" + (f" · PER {per:.0f}배라 최대 3점" if hi_per else "")))
     elif per and per > 0 and g_ok:
         # g 는 d["growth"] = 연평균 성장률(CAGR)이다. 작년 성장률이 아니다.
         # 그냥 "성장" 이라고 쓰면 최근 실적과 안 맞아 보인다.
         r = per / g
-        o.append(("밸류에이션", 10 if r < 1 else 8 if r < 1.5 else 5 if r < 2.5 else 2,
-                  f"PER {per:.0f} (연평균 성장 {g:.0f}%)"))
+        v_ = 10 if r < 1 else 8 if r < 1.5 else 5 if r < 2.5 else 2
+        o.append(("밸류에이션", min(v_, 3) if hi_per else v_,
+                  f"PER {per:.0f} (연평균 성장 {g:.0f}%)"
+                  + (" · PER 100배↑라 최대 3점" if hi_per else "")))
     elif per and per > 0 and (peg or g):
         # 성장률이나 PEG 는 있는데 믿을 수 없는 값인 경우.
         # PER 절대수준으로만 보고, 그 사실을 화면에 밝힌다.
