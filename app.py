@@ -31,6 +31,20 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
+# 화면 폭에 맞게 늘리기 — 스트림릿 1.46 부터 이름이 width="stretch" 로 바뀌었다.
+#   옛 이름(use_container_width)은 경고가 뜨고 언젠가 없어진다.
+#   PC 에 옛 스트림릿이 깔려 있을 수 있어 버전을 보고 맞는 이름을 쓴다.
+def _stretch_kw():
+    try:
+        v = tuple(int(x) for x in st.__version__.split(".")[:2])
+    except Exception:
+        v = (0, 0)
+    return {"width": "stretch"} if v >= (1, 46) else {"use_container_width": True}
+
+
+_FULL = _stretch_kw()
+
+
 import pandas as pd
 from pools import index_members, INDEX_MEMBER_PAGES
 from core import (BUILD as CORE_BUILD,
@@ -49,7 +63,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-25 09:42"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-25 10:05"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -1420,7 +1434,7 @@ def main():
                 # 저장된 데이터를 비우고 야후에서 새로 받아온다.
                 # (평소에는 15분간 재사용하므로 눌러도 값이 거의 안 바뀐다.
                 #  야후 자체가 15~20분 지연이라 완전 실시간은 되지 않는다.)
-                if st.button("새로 받기", use_container_width=True,
+                if st.button("새로 받기", **_FULL,
                              help="저장된 데이터를 비우고 다시 조회합니다"):
                     st.cache_data.clear()
                     st.rerun()
@@ -1505,7 +1519,7 @@ def main():
                     except ValueError:
                         cb1.caption("숫자만")
 
-                if cb2.button("상세", key=f"b{t_}", use_container_width=True):
+                if cb2.button("상세", key=f"b{t_}", **_FULL):
                     st.session_state["sel"] = t_
                     st.rerun()
 
@@ -1515,7 +1529,7 @@ def main():
                 if dd2:
                     detail(dd2, bands.get(st.session_state["sel"]),
                            buys.get(st.session_state["sel"]))
-                if st.button("닫기", use_container_width=True):
+                if st.button("닫기", **_FULL):
                     st.session_state["sel"] = None
                     st.rerun()
 
@@ -1529,14 +1543,14 @@ def main():
             else:
                 detail(d, bands.get(t), buys.get(t))
                 if t not in watch:
-                    if st.button("관심종목에 추가", use_container_width=True):
+                    if st.button("관심종목에 추가", **_FULL):
                         stt["tickers"] = watch + [t]
                         save_state(stt)
                         st.rerun()
 
     with tab3:
         n = st.text_input("추가할 티커", placeholder="예: CRDO").strip().upper()
-        if n and st.button("추가", use_container_width=True):
+        if n and st.button("추가", **_FULL):
             if n in watch:
                 st.warning("이미 있습니다.")
             else:
@@ -1593,7 +1607,7 @@ def main():
         with st.expander("백업 복원", expanded=not watch):
             rb = st.text_area("복사해 둔 백업 붙여넣기", height=68,
                               placeholder='{"tickers": ["MU","ALAB"], "bands": {}}')
-            if st.button("복원", use_container_width=True):
+            if st.button("복원", **_FULL):
                 try:
                     raw = json.loads(rb)
                     if isinstance(raw, list):
@@ -1638,7 +1652,7 @@ def main():
                                      "티커": m["ticker"], "회사": m["name"],
                                      "섹터": m.get("sector", ""), "세부 업종": m.get("sub", "")}
                                     for m in rows])
-                st.dataframe(df_, hide_index=True, use_container_width=True,
+                st.dataframe(df_, hide_index=True, **_FULL,
                              height=min(420, 38 + 35 * len(df_)))
                 pick = st.selectbox("자세히 볼 종목",
                                     ["선택하세요"] + [f'{m["ticker"]} · {m["name"]}' for m in rows],
@@ -1651,7 +1665,7 @@ def main():
                         st.error("데이터를 찾을 수 없습니다.")
                     else:
                         if t4 not in watch:
-                            if st.button("관심종목에 추가", use_container_width=True,
+                            if st.button("관심종목에 추가", **_FULL,
                                          key="idx_add"):
                                 stt["tickers"] = watch + [t4]
                                 save_state(stt)
