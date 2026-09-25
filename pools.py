@@ -333,7 +333,7 @@ def fetch_all_listed(which="nasdaq"):
 INDEX_MEMBER_PAGES = {
     "sp500": ("S&P 500", "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"),
     "nasdaq100": ("나스닥 100", "https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies"),
-    "kospi200": ("코스피 200", "https://finance.naver.com/sise/entryJongmok.naver?type=KPI200"),
+    "kospi200": ("코스피 시총 상위 200", "yahoo:kospi_top200"),
 }
 
 
@@ -348,14 +348,15 @@ def index_members(key):
     if key not in INDEX_MEMBER_PAGES:
         return []
     if key == "kospi200":
-        # 구성은 네이버, 업종·주요제품은 KIND 에서 붙인다 (KIND 가 막히면 업종 빈칸)
-        k200 = kospi200_list()
-        if not k200:
+        # 네이버 코스피 200 페이지가 없어지고(410) 거래소는 로그인이 필요해져서,
+        # 거래소 코스피 목록 + 야후 시총으로 '시총 상위 200' 을 만든다 (코스피 200 근사)
+        top = kospi_top200()
+        if not top:
             return []
         info = {x["code"]: x for x in kr_listing("kospi")}
         return [{"ticker": c + ".KS", "name": n,
                  "sector": info.get(c, {}).get("industry", ""),
-                 "sub": info.get(c, {}).get("products", "")} for c, n in k200]
+                 "sub": info.get(c, {}).get("products", "")} for c, n, _m in top]
     _, url = INDEX_MEMBER_PAGES[key]
     p = _wiki_cache_path(url + "#members")
     if os.path.exists(p) and time.time() - os.path.getmtime(p) < WIKI_TTL:
@@ -450,6 +451,9 @@ KR_INDUSTRY_PRESETS = {
 KR_INDUSTRY_PRESETS["ours"] = (KR_INDUSTRY_PRESETS["semi"] + KR_INDUSTRY_PRESETS["ai"]
                                + KR_INDUSTRY_PRESETS["power"] + KR_INDUSTRY_PRESETS["robot"]
                                + KR_INDUSTRY_PRESETS["comm"])
+# 한국 목록을 못 받았을 때 이유 (화면에 보여 준다)
+KR_LAST_ERR = {}
+
 # 업종은 기계인데 주요제품이 반도체 장비인 회사(장비주)를 놓치지 않도록, 주요제품에서도 찾는 말
 KR_PRODUCT_WORDS = ["반도체", "웨이퍼", "HBM"]
 
@@ -472,7 +476,7 @@ def _http_get(url, enc=None, timeout=30):
     return raw.decode("utf-8", "replace")
 
 
-def _kr_cache(key, loader, min_len):
+def _kr_cache(key, loader, min_len, err_key=None):
     """일주일 저장. 너무 적게 받아졌으면(깨진 응답) 저장하지 않는다."""
     import json, os, time
     pth = _wiki_cache_path(key)
@@ -486,8 +490,12 @@ def _kr_cache(key, loader, min_len):
             pass
     try:
         got = loader()
-    except Exception:
+    except Exception as e:
         got = []
+        if err_key and err_key not in KR_LAST_ERR:
+            KR_LAST_ERR[err_key] = f"접속 오류 — {type(e).__name__}: {str(e)[:120]}"
+    if len(got) < min_len and err_key and err_key not in KR_LAST_ERR:
+        KR_LAST_ERR[err_key] = f"{len(got)}개만 받음 (최소 {min_len}개 필요)"
     if len(got) >= min_len:
         try:
             with open(pth, "w", encoding="utf-8") as f:
@@ -542,7 +550,7 @@ def kr_listing(market="kospi"):
                         "industry": ind, "products": prod, "market": market})
         return out
 
-    return _kr_cache(url, load, 100)
+    return _kr_cache(url, load, 100, err_key=market)
 
 
 def kospi200_list():
@@ -550,19 +558,42 @@ def kospi200_list():
     import re
 
     def load():
-        seen, out = set(), []
+        import os
+        KR_LAST_ERR.pop("kospi200", None)
+        seen, out, per = set(), [], []
         for pg in range(1, 30):
-            html = _http_get(NAVER_K200.format(p=pg), "cp949")
-            got = re.findall(r'code=([0-9A-Z]{6})"[^>]*>\s*([^<]+?)\s*</a>', html)
+            try:
+                html = _http_get(NAVER_K200.format(p=pg), "cp949")
+            except Exception as e:
+                KR_LAST_ERR["kospi200"] = (f"네이버 {pg}쪽 접속 오류 — {type(e).__name__}: {str(e)[:120]}"
+                                           + (f" · 그 전까지 쪽별 {per}" if per else ""))
+                break
+            if pg == 1:
+                try:           # 첫 쪽 원본을 남겨 둔다 (모양이 바뀌었는지 볼 때)
+                    os.makedirs(WIKI_CACHE, exist_ok=True)
+                    with open(os.path.join(WIKI_CACHE, "naver_k200_page1.html"), "w",
+                              encoding="utf-8") as f:
+                        f.write(html)
+                except Exception:
+                    pass
+            # 링크 뒤에 다른 값(&, 따옴표 등)이 붙어도 잡는다
+            got = re.findall(r'code=([0-9A-Z]{6})[^>]*>\s*([^<]+?)\s*</a>', html)
             new = [(c, n) for c, n in got if c not in seen]
+            per.append(len(new))
             if not new:
+                if pg == 1:
+                    KR_LAST_ERR["kospi200"] = (f"네이버 첫 쪽에서 종목 링크를 못 찾음 (받은 글자 {len(html):,}자) "
+                                               f"— 페이지 모양이 바뀐 듯. {WIKI_CACHE}\\naver_k200_page1.html 확인")
+                elif len(out) < 150:
+                    KR_LAST_ERR["kospi200"] = (f"{pg}쪽부터 새 종목이 안 나옴 · 쪽별 {per[:-1]} "
+                                               f"→ 쪽 넘기기가 안 먹는 듯 ({len(out)}개만 받음)")
                 break
             for c, n in new:
                 seen.add(c)
                 out.append([c, n])
         return out
 
-    got = _kr_cache(NAVER_K200, load, 150)
+    got = _kr_cache(NAVER_K200, load, 150, err_key="kospi200")
     return [tuple(x) for x in got]
 
 
@@ -576,3 +607,68 @@ def kr_match(item, key):
     if key in ("semi", "ours") and any(w in prod for w in KR_PRODUCT_WORDS):
         return True
     return False
+
+
+def kospi_top200(progress=None):
+    """코스피 시총 상위 200 [(code, name, mcap)]. 코스피 200 을 로그인 없이 못 받게 되어 대신 쓴다.
+
+    ★ 코스피 200 은 시총 큰 회사를 업종별로 고른 것이라 대부분 겹치지만 같지는 않다.
+    1) 야후 종목 검색(yf.screen) — 한국·코스피·시총 큰 순 250개를 한 번에 (몇 초)
+    2) 안 되면 거래소(KIND) 코스피 목록 전부에 야후 시총을 하나씩 붙인다 (몇 분)
+    우선주는 거래소 목록에 없는 코드라 뺀다. 일주일 저장.
+    """
+    import yfinance as yf
+
+    def load():
+        KR_LAST_ERR.pop("kospi200", None)
+        kind = {x["code"]: x for x in kr_listing("kospi")}
+        rows = {}
+        # 1) 한 번에
+        try:
+            q = yf.EquityQuery("and", [yf.EquityQuery("eq", ["region", "kr"]),
+                                       yf.EquityQuery("is-in", ["exchange", "KSC"])])
+            res = yf.screen(q, sortField="intradaymarketcap", sortAsc=False, size=250)
+            for it in (res or {}).get("quotes", []):
+                sym = str(it.get("symbol") or "")
+                mc = it.get("marketCap")
+                if not sym.endswith(".KS") or not mc:
+                    continue
+                code = sym[:-3]
+                if kind and code not in kind:          # 우선주·리츠 등 거래소 목록 밖
+                    continue
+                nm = (kind.get(code) or {}).get("name") or it.get("shortName") or code
+                rows[code] = (code, nm, float(mc))
+        except Exception as e:
+            KR_LAST_ERR["kospi200"] = f"야후 종목 검색 실패({type(e).__name__}) → 하나씩 받는 중"
+        # 2) 하나씩 (1이 모자랄 때)
+        if len(rows) < 150:
+            if not kind:
+                KR_LAST_ERR["kospi200"] = "거래소(KIND) 코스피 목록도 못 받아 시총을 붙일 대상이 없음"
+                return []
+            from concurrent.futures import ThreadPoolExecutor
+
+            def one(code):
+                try:
+                    fi = yf.Ticker(code + ".KS").fast_info
+                    mc = fi.get("marketCap") if hasattr(fi, "get") else getattr(fi, "market_cap", None)
+                    return code, (float(mc) if mc else None)
+                except Exception:
+                    return code, None
+            codes = list(kind)
+            done = 0
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                for code, mc in ex.map(one, codes):
+                    done += 1
+                    if progress and done % 20 == 0:
+                        progress(done, len(codes))
+                    if mc:
+                        rows[code] = (code, kind[code]["name"], mc)
+            if len(rows) < 150:
+                KR_LAST_ERR["kospi200"] = f"야후 시총을 {len(rows)}개만 받음 (야후가 막았을 수 있음)"
+        top = sorted(rows.values(), key=lambda x: -x[2])[:200]
+        if len(top) >= 150:
+            KR_LAST_ERR.pop("kospi200", None)       # 중간 메모는 성공하면 지운다
+        return [list(x) for x in top]
+
+    got = _kr_cache("kospi_top200_yahoo", load, 150, err_key="kospi200")
+    return [tuple(x) for x in got]

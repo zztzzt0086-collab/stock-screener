@@ -49,7 +49,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-25 09:15"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-25 09:42"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -1616,7 +1616,12 @@ def main():
         with st.spinner("목록 불러오는 중"):
             mem = _idx_members(ik) or []
         if not mem:
-            st.warning("목록을 못 받았습니다. 잠시 뒤 다시 시도하세요.")
+            try:
+                from pools import KR_LAST_ERR as _kre
+                why = _kre.get(ik)
+            except Exception:
+                why = None
+            st.warning("목록을 못 받았습니다." + (f" 이유: {why}" if why else " 잠시 뒤 다시 시도하세요."))
         else:
             q = st.text_input("검색", placeholder="티커나 회사 이름 (예: NVDA, micron)",
                               key="idx_q").strip().lower()
