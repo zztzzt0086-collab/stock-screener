@@ -63,7 +63,7 @@ from core import (BUILD as CORE_BUILD,
 # ─────────────────────────────────────────────────────────────
 WATCHFILE = "watchlist.json"
 
-APP_BUILD = "2026-09-25 10:05"      # 이 파일이 만들어진 시각
+APP_BUILD = "2026-09-26 03:34"      # 이 파일이 만들어진 시각
 
 st.set_page_config(page_title="스크리너", page_icon="◆", layout="centered")
 
@@ -994,6 +994,7 @@ def card(d, mode, band=None, buy=None):
             w0 = item_text(x0.get("items")) or x0.get("kind") or x0["form"]
             c0 = ("#16A34A" if "실적" in w0 or "계약" in w0
                   else "#DC2626" if "신뢰 불가" in w0 or "상장폐지" in w0
+                  else "#B45309" if "상장 요건" in w0          # 형식상 미달일 수 있어 노랑 — 원문 확인
                   else CHARCOAL)
             filline = (f'<div class="bandline">'
                        f'<span style="color:{MUTED}">{x0["date"][5:]} '
@@ -1326,6 +1327,7 @@ def _detail_body(d, band=None, buy=None):
                 what = it or x.get("kind") or ""
                 cf = ("#16A34A" if it and ("실적" in it or "계약" in it)
                       else "#DC2626" if it and ("신뢰 불가" in it or "상장폐지" in it)
+                      else "#B45309" if it and "상장 요건" in it
                       else CHARCOAL)
                 w = (f'<a href="{x["link"]}" target="_blank" '
                      f'style="color:{cf};text-decoration:none">{what}</a>'
